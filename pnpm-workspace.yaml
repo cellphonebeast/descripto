@@ -1,0 +1,8 @@
+allowBuilds:
+  sharp: true
+  electron: true
+
+# Next 15's transitive ranges otherwise retain older vulnerable builds.
+overrides:
+  postcss: 8.5.29
+  sharp: 0.35.5

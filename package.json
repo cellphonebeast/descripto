@@ -1,0 +1,51 @@
+{
+  "name": "descripto",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A local video editor: edit your transcript, preview cuts instantly, and export with your own AI connections.",
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "desktop": "electron .",
+    "desktop:dev": "node scripts/desktop-dev.mjs",
+    "app": "node scripts/make-app.mjs",
+    "test:connections": "node --no-experimental-strip-types --test tests/connections.cjs",
+    "test": "node --no-experimental-strip-types --test tests/*.cjs",
+    "icons": "node scripts/make-brand-assets.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.296",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "next": "15.5.27",
+    "react": "19.1.9",
+    "react-dom": "19.1.9",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "electron": "^44.7.0",
+    "postcss": "^8.5.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.8.0"
+  },
+  "productName": "Descripto",
+  "main": "electron/main.js",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/earlyaidopters/descripto.git"
+  },
+  "bugs": {
+    "url": "https://github.com/earlyaidopters/descripto/issues"
+  },
+  "homepage": "https://github.com/earlyaidopters/descripto#readme",
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "packageManager": "pnpm@12.6.0"
+}

@@ -1,0 +1,17 @@
+node_modules/
+.next*/
+/projects/
+dist-app/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+*.tsbuildinfo
+*.pem
+*.key
+connections.json
+build/*
+!build/icon.png
+!build/icon.icns
