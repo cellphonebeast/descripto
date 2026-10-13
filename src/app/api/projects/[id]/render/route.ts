@@ -42,8 +42,10 @@ export async function POST(_req: NextRequest, ctx: Context) {
         await finishWithAuphonic(out, audioKey, stage => { if (!signal.aborted) job.stage = stage; }, signal);
       }
       signal.throwIfAborted();
+      const rendered = await probe(out, signal);
+      signal.throwIfAborted();
       const latest = loadProject(id) || p;
-      latest.lastRender = { file: out, duration: total, renderedAt: new Date().toISOString(), studioSound: p.studioSound, cutCount: cuts.length, cuts };
+      latest.lastRender = { file: out, duration: rendered.duration, renderedAt: new Date().toISOString(), studioSound: p.studioSound, cutCount: cuts.length, cuts };
       saveProject(latest);
       job.output = out;
     } catch (error) {

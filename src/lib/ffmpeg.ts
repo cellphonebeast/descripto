@@ -83,6 +83,7 @@ export function renderProgram(
     "-c:a", "aac",
     "-b:a", "192k",
     "-ar", "48000",
+    "-t", String(opts.total),
     "-movflags", "+faststart",
     out,
   ];
