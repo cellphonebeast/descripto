@@ -62,7 +62,7 @@ export function renderProgram(
     }
     const audioInputs = keeps.map((_, i) => `[a${i}]`).join("");
     const chain = opts.studioSound
-      ? `highpass=f=70,afftdn=nf=-25dB,acompressor=threshold=-18dB:ratio=2.5:attack=15:release=200,loudnorm=I=-14:TP=-1.5:LRA=11`
+      ? `highpass=f=70,afftdn=nf=-25,acompressor=threshold=-18dB:ratio=2.5:attack=15:release=200,loudnorm=I=-14:TP=-1.5:LRA=11`
       : "anull";
     filters.push(`${audioInputs}concat=n=${n}:v=0:a=1,${chain}[aout]`);
     mapArgs = mapArgs.concat(["-map", "[aout]"]);
