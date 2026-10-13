@@ -16,6 +16,7 @@ export function projectsRoot(): string {
 }
 
 export function projectDir(id: string): string {
+  if (!/^p[a-z0-9]+$/.test(id)) throw new Error("Invalid project ID");
   return path.join(projectsRoot(), id);
 }
 

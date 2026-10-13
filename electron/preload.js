@@ -10,6 +10,11 @@ contextBridge.exposeInMainWorld("descripto", {
     ipcRenderer.on("server-status", listener);
     return () => ipcRenderer.removeListener("server-status", listener);
   },
+  onEditCommand: (callback) => {
+    const listener = (_event, command) => callback(command);
+    ipcRenderer.on("edit-command", listener);
+    return () => ipcRenderer.removeListener("edit-command", listener);
+  },
   pathForFile: (file) => {
     try {
       return webUtils.getPathForFile(file);

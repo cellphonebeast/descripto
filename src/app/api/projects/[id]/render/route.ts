@@ -43,7 +43,7 @@ export async function POST(_req: NextRequest, ctx: Context) {
       }
       signal.throwIfAborted();
       const latest = loadProject(id) || p;
-      latest.lastRender = { file: out, duration: total, renderedAt: new Date().toISOString(), studioSound: p.studioSound, cutCount: cuts.length };
+      latest.lastRender = { file: out, duration: total, renderedAt: new Date().toISOString(), studioSound: p.studioSound, cutCount: cuts.length, cuts };
       saveProject(latest);
       job.output = out;
     } catch (error) {

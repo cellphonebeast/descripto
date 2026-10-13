@@ -39,6 +39,7 @@ export interface ProjectState {
 }
 
 export interface RenderInfo {
+  cuts?: { start: number; end: number }[];
   file: string; // absolute path of rendered mp4
   duration: number; // program duration after cuts
   renderedAt: string;

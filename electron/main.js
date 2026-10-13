@@ -82,6 +82,18 @@ function createWindow() {
   });
 }
 
+async function historyCommand(command) {
+  if (!win || win.isDestroyed()) return;
+  const textEditing = await win.webContents.executeJavaScript(`Boolean(document.activeElement?.matches('input, textarea, [contenteditable="true"]'))`).catch(() => true);
+  if (textEditing) win.webContents[command]();
+  else win.webContents.send("edit-command", command);
+}
+function openSettings() {
+  if (!win) return;
+  const current = new URL(win.webContents.getURL()).pathname;
+  const back = /^\/editor\/p[a-z0-9]+$/.test(current) ? `?returnTo=${encodeURIComponent(current)}` : "";
+  win.webContents.loadURL(`${BASE}/settings${back}`);
+}
 function buildMenu() {
   const isMac = process.platform === "darwin";
   const template = [
@@ -91,7 +103,7 @@ function buildMenu() {
             label: app.name,
             submenu: [
               { role: "about" },
-              { label: "Settings…", accelerator: "CmdOrCtrl+,", click: () => win?.webContents.loadURL(`${BASE}/settings`) },
+              { label: "Settings…", accelerator: "CmdOrCtrl+,", click: openSettings },
               { type: "separator" },
               { role: "hide" },
               { role: "hideOthers" },
@@ -124,7 +136,7 @@ function buildMenu() {
         { role: isMac ? "close" : "quit" },
       ],
     },
-    { label: "Edit", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
+    { label: "Edit", submenu: [{ label: "Undo", accelerator: "CmdOrCtrl+Z", click: () => historyCommand("undo") }, { label: "Redo", accelerator: "CmdOrCtrl+Shift+Z", click: () => historyCommand("redo") }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
     { label: "View", submenu: [{ role: "reload" }, { role: "forceReload" }, { role: "toggleDevTools" }, { type: "separator" }, { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { role: "togglefullscreen" }] },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -152,7 +164,7 @@ function shutdown() {
   serverProc?.stop();
   app.quit();
 }
-app.on("before-quit", () => serverProc?.stop());
+app.on("will-quit", () => serverProc?.stop());
 app.on("window-all-closed", shutdown);
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

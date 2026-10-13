@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Icon, StudioMark } from "@/components/studio-icon";
 import { fmtTime } from "@/lib/types";
@@ -16,6 +16,7 @@ export default function Home({ initialProjects }: { initialProjects: Proj[] }) {
   const [filter, setFilter] = useState("all");
   const [sort, setSort] = useState("recent");
   const fileRef = useRef<HTMLInputElement>(null);
+  const failedFile = useRef<File | null>(null);
   const importing = useRef(false);
   const dragDepth = useRef(0);
 
@@ -28,11 +29,14 @@ export default function Home({ initialProjects }: { initialProjects: Proj[] }) {
     } catch (e) { setError((e as Error).message); }
   }, []);
 
+  useEffect(() => { void load(); }, [load]);
+
   async function importFile(f: File) {
     if (importing.current) return;
     if (!/\.(mp4|mov|m4v|mkv|webm|mp3|wav|m4a|aac|ogg|flac)$/i.test(f.name) && !/^(video|audio)\//.test(f.type)) {
       setError("Choose a video or audio file, such as MP4, MOV, MP3 or WAV."); return;
     }
+    failedFile.current = f;
     importing.current = true;
     setBusy(true); setError("");
     try {
@@ -61,7 +65,7 @@ export default function Home({ initialProjects }: { initialProjects: Proj[] }) {
         <Link href="/settings" className="icon-button" aria-label="Settings" title="Settings"><Icon name="settings" size={17} /></Link>
       </header>
       <div className="library-content" id="library-content">
-        {error && <div className="error-banner" role="alert">{error}<button className="btn-ghost" onClick={() => { setError(""); void load(); }}>Retry</button></div>}
+        {error && <div className="error-banner" role="alert">{error}<button className="btn-ghost" onClick={() => { setError(""); if (failedFile.current) void importFile(failedFile.current); else void load(); }}>Retry</button></div>}
         <section className="project-library" aria-labelledby="projects-heading">
           <div className="library-heading">
             <h1 id="projects-heading">Projects <span>{projects.length}</span></h1>

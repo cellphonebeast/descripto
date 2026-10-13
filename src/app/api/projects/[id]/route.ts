@@ -1,7 +1,9 @@
 import fs from "fs";
 import { NextRequest, NextResponse } from "next/server";
-import { loadProject, saveProject } from "@/lib/store";
+import { loadProject, saveProject, projectDir } from "@/lib/store";
 import { computeCuts, programDuration } from "@/lib/edl";
+
+import { applyEdits, type EditState } from "@/lib/edit-state";
 
 export const runtime = "nodejs";
 
@@ -19,7 +21,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 }
 
 interface Mutation {
-  op: "setDeleted" | "restore" | "restoreAll" | "deleteFillers" | "restoreFillers" | "applyCorrection" | "setStudioSound";
+  edit?: EditState;
+  op: "setEditState" | "setDeleted" | "restore" | "restoreAll" | "deleteFillers" | "restoreFillers" | "applyCorrection" | "setStudioSound";
   wordIds?: string[];
   deleted?: boolean;
   studioSound?: boolean;
@@ -35,6 +38,9 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   const byId = new Map(p.words.map((w) => [w.id, w]));
 
   switch (body.op) {
+    case "setEditState":
+      try { applyEdits(p, body.edit); } catch (error) { return NextResponse.json({ error: (error as Error).message }, { status: 409 }); }
+      break;
     case "setDeleted":
       for (const wid of body.wordIds || []) {
         const w = byId.get(wid);
@@ -83,6 +89,6 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
 export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const p = loadProject(id);
-  if (p) fs.rmSync(p.sourceFile.slice(0, p.sourceFile.lastIndexOf("/")), { recursive: true, force: true });
+  if (p) fs.rmSync(projectDir(id), { recursive: true, force: true });
   return NextResponse.json({ ok: true });
 }

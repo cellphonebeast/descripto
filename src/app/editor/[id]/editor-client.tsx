@@ -8,12 +8,20 @@ import { computeCuts, programDuration, sourceToProgram, programToSource, type Ra
 import { nextPreviewTime } from "@/lib/preview";
 import { fmtTime, type AuditReport, type ProjectState, type ReviewReport } from "@/lib/types";
 
+import { captureEdits, applyEdits, createEditQueue, type EditState } from "@/lib/edit-state";
+
 type Tab = "review" | "audit" | "agent";
 
 export default function EditorClient({ id, initialProject }: { id: string; initialProject: ProjectState }) {
   const [project, setProject] = useState<ProjectState>(initialProject);
   const clock = useMemo(createPlaybackClock, []);
+  const timelineClock = useMemo(createPlaybackClock, []);
+  const pendingRender = useRef<{ time: number; playing: boolean } | null>(null);
   const [error, setError] = useState("");
+  const [mediaError, setMediaError] = useState(false);
+  const [focusedWord, setFocusedWord] = useState("");
+  const actionRunning = useRef(false);
+  const startingExport = useRef(false);
   const [serverStatus, setServerStatus] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [renderProg, setRenderProg] = useState<{ pct: number; stage: string } | null>(null);
@@ -23,6 +31,13 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
   const cancelPending = useRef(false);
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const [tab, setTab] = useState<Tab>("agent");
+  const [matchIndex, setMatchIndex] = useState(-1);
+  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "error">("saved");
+  const [saveError, setSaveError] = useState("");
+  const saveQueue = useMemo(() => createEditQueue<EditState>(async edit => {
+    const response = await fetch(`/api/projects/${id}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ op: "setEditState", edit }) });
+    if (!response.ok) { const body = await response.json(); throw new Error(body.error || "Could not save edits."); }
+  }, (status, error) => { setSaveStatus(status); setSaveError(error || ""); }), [id]);
   const [search, setSearch] = useState("");
   const [hideCuts, setHideCuts] = useState(true);
   const [review, setReview] = useState<ReviewReport | null>(initialProject.lastReview || null);
@@ -34,10 +49,12 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const dragging = useRef(false);
+  const selectionAnchor = useRef<number | null>(null);
+  const rangeGesture = useRef(false);
   const previousCuts = useRef<Range[] | null>(null);
   const pendingPreview = useRef<{ time: number; playing: boolean } | null>(null);
-  const history = useRef<Map<string, boolean>[]>([]);
-  const future = useRef<Map<string, boolean>[]>([]);
+  const history = useRef<EditState[]>([]);
+  const future = useRef<EditState[]>([]);
 
   // ── data ─────────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -61,6 +78,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
 
   const words = useMemo(() => project?.words ?? [], [project.words]);
   const wordIndex = useMemo(() => new Map(words.map((word, index) => [word.id, index])), [words]);
+  const tabStopWord = words.find(w => w.id === focusedWord && (!hideCuts || !w.deleted))?.id || words.find(w => !hideCuts || !w.deleted)?.id;
   const searchTerm = search.trim().toLocaleLowerCase();
   const matches = words.filter(w => (!hideCuts || !w.deleted) && searchTerm && w.text.toLocaleLowerCase().includes(searchTerm));
   const cuts: Range[] = useMemo(() => computeCuts(words), [words]);
@@ -74,81 +92,82 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
   // ── mutations ────────────────────────────────────────────────────────────
   const snapshot = useCallback(() => {
     if (!project) return;
-    const snap = new Map(project.words.map((w) => [w.id, w.deleted]));
-    history.current.push(snap);
+    history.current.push(captureEdits(project));
     if (history.current.length > 100) history.current.shift();
     future.current = [];
   }, [project]);
 
-  const mutate = useCallback(
-    async (op: string, body: Record<string, unknown>) => {
-      const r = await fetch(`/api/projects/${id}`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ op, ...body }),
-      });
-      const j = await r.json();
-      if (!r.ok) setError(j.error || "mutation failed");
-      else setError("");
-      return j;
-    },
-    [id],
-  );
+  const locked = !!busy || !!renderProg;
+  const actionDisabled = locked || saveStatus !== "saved";
+  function persist() { saveQueue.push(captureEdits(project)); }
+  function guardNavigation(e: React.MouseEvent) {
+    if (saveQueue.isPending()) { e.preventDefault(); setError("Your edits are not saved yet. Wait for saving to finish, or use Retry save."); }
+  }
+  useEffect(() => {
+    const prevent = (event: BeforeUnloadEvent) => { if (saveQueue.isPending()) { event.preventDefault(); event.returnValue = ""; } };
+    window.addEventListener("beforeunload", prevent);
+    return () => window.removeEventListener("beforeunload", prevent);
+  }, [saveQueue]);
 
   const refreshFromLocal = useCallback(() => {
     setProject((p) => (p ? { ...p, words: [...p.words] } : p));
   }, []);
 
   function setDeleted(ids: string[], deleted: boolean) {
-    if (!project || ids.length === 0) return;
+    if (locked || !ids.some(id => { const word = words[wordIndex.get(id) ?? -1]; return word && word.deleted !== deleted; })) return;
     snapshot();
     const set = new Set(ids);
     for (const w of project.words) {
       if (set.has(w.id) && w.deleted !== deleted) w.deleted = deleted;
     }
     refreshFromLocal();
-    void mutate("setDeleted", { wordIds: ids, deleted });
+    persist();
     setSelection(new Set());
   }
 
   async function fillers(deleteThem: boolean) {
-    if (!project) return;
+    if (locked) return;
     snapshot();
     for (const w of project.words) {
       if (w.filler) w.deleted = deleteThem;
     }
     refreshFromLocal();
-    await mutate(deleteThem ? "deleteFillers" : "restoreFillers", {});
+    persist();
   }
 
-  function undo() {
-    if (!project || history.current.length === 0) return;
-    const snap = history.current.pop()!;
-    future.current.push(new Map(project.words.map((w) => [w.id, w.deleted])));
-    for (const w of project.words) {
-      const v = snap.get(w.id);
-      if (v !== undefined) w.deleted = v;
-    }
-    refreshFromLocal();
-    void mutate("restoreAll", {}).then(async () => {
-      const deletedIds = project.words.filter((w) => w.deleted).map((w) => w.id);
-      if (deletedIds.length) await mutate("setDeleted", { wordIds: deletedIds, deleted: true });
-    });
+  function restoreHistory(from: React.RefObject<EditState[]>, to: React.RefObject<EditState[]>) {
+    if (locked || !from.current.length) return;
+    to.current.push(captureEdits(project));
+    applyEdits(project, from.current.pop()!);
+    setAudit(project.lastAudit ? { ...project.lastAudit } : null);
+    setSelection(new Set()); refreshFromLocal(); persist();
+  }
+  function undo() { restoreHistory(history, future); }
+  function redo() { restoreHistory(future, history); }
+
+  function wordKeyDown(e: React.KeyboardEvent, idx: number) {
+    const word = words[idx];
+    if (e.key === "Enter") { e.preventDefault(); seekSource(word.start); }
+    if (e.key === " ") { e.preventDefault(); if (!locked) { selectionAnchor.current = idx; setSelection(new Set([word.id])); } }
+    const direction = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    if (!direction) return;
+    e.preventDefault();
+    let next = idx + direction;
+    while (words[next] && hideCuts && words[next].deleted) next += direction;
+    if (!words[next]) return;
+    if (e.shiftKey && !locked) {
+      selectionAnchor.current ??= idx;
+      const anchor = selectionAnchor.current;
+      setSelection(new Set(words.slice(Math.min(anchor, next), Math.max(anchor, next) + 1).filter(w => !hideCuts || !w.deleted).map(w => w.id)));
+    } else selectionAnchor.current = next;
+    document.getElementById(`word-${words[next].id}`)?.focus();
   }
 
-  function redo() {
-    if (!project || future.current.length === 0) return;
-    const snap = future.current.pop()!;
-    history.current.push(new Map(project.words.map((w) => [w.id, w.deleted])));
-    for (const w of project.words) {
-      const v = snap.get(w.id);
-      if (v !== undefined) w.deleted = v;
-    }
-    refreshFromLocal();
-    void mutate("restoreAll", {}).then(async () => {
-      const deletedIds = project.words.filter((w) => w.deleted).map((w) => w.id);
-      if (deletedIds.length) await mutate("setDeleted", { wordIds: deletedIds, deleted: true });
-    });
+  function findMatch(direction: number) {
+    if (!matches.length) return;
+    const index = matchIndex < 0 ? (direction > 0 ? 0 : matches.length - 1) : (matchIndex + direction + matches.length) % matches.length;
+    setMatchIndex(index);
+    document.getElementById(`word-${matches[index].id}`)?.scrollIntoView({ block: "center" });
   }
 
   // Every edit returns an old rendered preview to the current live edit.
@@ -172,7 +191,13 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
     let lastPublished = -1;
     const sync = () => {
       if (video.readyState === 0) return;
-      if (playMode === "render") { clock.update(video.currentTime, !video.paused); return; }
+      if (playMode === "render") {
+        if (pendingRender.current) { const pending = pendingRender.current; pendingRender.current = null; video.currentTime = pending.time; if (pending.playing) void video.play().catch(() => {}); }
+        clock.update(video.currentTime, !video.paused);
+        const source = programToSource(project.lastRender?.cuts || cuts, video.currentTime);
+        timelineClock.update(Math.min(progDur, sourceToProgram(cuts, source)), !video.paused);
+        return;
+      }
       if (pendingPreview.current) {
         const pending = pendingPreview.current;
         pendingPreview.current = null;
@@ -183,6 +208,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
       if (Math.abs(time - video.currentTime) > 0.0001) video.currentTime = time;
       if (time >= project.sourceDuration || progDur === 0) video.pause();
       if (video.paused || Math.abs(time - lastPublished) >= 0.08) { clock.update(Math.min(progDur, sourceToProgram(cuts, time)), !video.paused); lastPublished = time; }
+      timelineClock.update(clock.getSnapshot().time, !video.paused);
       const word = words.find(w => !w.deleted && time >= w.start && time < w.end);
       const found = word?.id || null;
       if (found !== activeWord.current) {
@@ -211,7 +237,20 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
       video.removeEventListener("play", start);
       video.removeEventListener("pause", pause);
     };
-  }, [cuts, words, playMode, project.sourceDuration, progDur, clock]);
+  }, [cuts, words, playMode, project.sourceDuration, progDur, clock, timelineClock, project.lastRender]);
+
+  function switchPreview(mode: "source" | "render", renderedTime?: number) {
+    const video = videoRef.current;
+    if (!video) return;
+    if (mode === "render" && project.lastRender) {
+      const time = renderedTime ?? (playMode === "source" ? sourceToProgram(project.lastRender.cuts || cuts, video.currentTime) : video.currentTime);
+      if (playMode === "render") { video.currentTime = time; return; }
+      pendingRender.current = { time: Math.min(project.lastRender.duration, time), playing: !video.paused };
+    } else if (mode === "source" && playMode === "render") {
+      pendingPreview.current = { time: programToSource(project.lastRender?.cuts || cuts, video.currentTime), playing: !video.paused };
+    }
+    setPlayMode(mode);
+  }
 
   function seekSource(time: number) {
     const video = videoRef.current;
@@ -227,7 +266,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
 
   function seekEdited(time: number) {
     const video = videoRef.current;
-    if (!video || progDur === 0) return;
+    if (!video || (playMode === "source" && progDur === 0)) return;
     if (playMode === "render") {
       video.currentTime = Math.min(project.lastRender?.duration || 0, time);
       clock.update(video.currentTime, !video.paused);
@@ -241,7 +280,8 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") return;
+      if (e.key === "Escape") { setSelection(new Set()); return; }
+      if (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.isContentEditable) return;
       if ((e.key === "Delete" || e.key === "Backspace") && selection.size > 0) {
         e.preventDefault();
         setDeleted([...selection], true);
@@ -253,24 +293,28 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selection, project]);
+  }, [selection, project, locked]);
+
+  useEffect(() => {
+    return (window as any).descripto?.onEditCommand?.((command: string) => { if (command === "undo") undo(); else if (command === "redo") redo(); });
+    // History commands use the current project and lock state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, locked]);
 
   // ── word selection via drag ──────────────────────────────────────────────
   function wordMouseDown(e: React.MouseEvent, idx: number) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || locked) return;
     dragging.current = true;
-    const set = new Set<string>([words[idx].id]);
-    setSelection(set);
+    rangeGesture.current = e.shiftKey;
+    if (!e.shiftKey || selectionAnchor.current === null) selectionAnchor.current = idx;
+    wordMouseEnter(idx);
   }
   function wordMouseEnter(idx: number) {
-    if (!dragging.current) return;
-    const anchorId = [...selection][0];
-    const anchor = words.findIndex((w) => w.id === anchorId);
-    if (anchor < 0) return;
+    if (!dragging.current || selectionAnchor.current === null) return;
+    const anchor = selectionAnchor.current;
+    if (anchor !== idx) rangeGesture.current = true;
     const [a, b] = anchor < idx ? [anchor, idx] : [idx, anchor];
-    const set = new Set<string>();
-    for (let i = a; i <= b; i++) set.add(words[i].id);
-    setSelection(set);
+    setSelection(new Set(words.slice(a, b + 1).filter(w => !hideCuts || !w.deleted).map(w => w.id)));
   }
   useEffect(() => {
     const up = () => (dragging.current = false);
@@ -280,6 +324,8 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
 
   // ── actions ──────────────────────────────────────────────────────────────
   async function transcribe() {
+    if (actionDisabled || saveQueue.isPending() || actionRunning.current) return;
+    actionRunning.current = true;
     setBusy("Turning your recording into an editable transcript…");
     setError("");
     try {
@@ -290,7 +336,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(null);
+      actionRunning.current = false; setBusy(null);
     }
   }
 
@@ -317,7 +363,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
         if (disposed) return;
         if (!response.ok) throw new Error(job.error || "Could not check export status.");
         if (["done", "error", "cancelled"].includes(job.status)) {
-          if (job.status === "done") { await load(); if (disposed) return; setPlayMode("render"); }
+          if (job.status === "done") { await load(); if (disposed) return; setPlayMode("render"); setExportNotice("Export ready. Download your edited video below."); }
           else if (job.status === "cancelled") { setExportNotice("Export cancelled. Your edits are saved."); if (job.error) setError(job.error); }
           else setError(job.error || "Export failed.");
           setRenderProg(null); setRenderJobId(null); setCancellingRender(false);
@@ -354,7 +400,8 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
   }
 
   async function render() {
-    if (renderProg) return;
+    if (actionDisabled || saveQueue.isPending() || progDur === 0 || startingExport.current) return;
+    startingExport.current = true;
     setError(""); setExportNotice(""); cancelPending.current = false;
     setRenderProg({ pct: 0, stage: "Starting" });
     try {
@@ -364,9 +411,12 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
       setRenderJobId(job.jobId);
       if (cancelPending.current) void stopExport(job.jobId);
     } catch (error) { setRenderProg(null); setCancellingRender(false); setError((error as Error).message); }
+    finally { startingExport.current = false; }
   }
 
   async function runReview() {
+    if (actionDisabled || saveQueue.isPending() || actionRunning.current) return;
+    actionRunning.current = true;
     setBusy("Gemini Flash is watching the rendered video…");
     setError("");
     try {
@@ -378,11 +428,13 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(null);
+      actionRunning.current = false; setBusy(null);
     }
   }
 
   async function runAudit() {
+    if (actionDisabled || saveQueue.isPending() || actionRunning.current) return;
+    actionRunning.current = true;
     setBusy("Checking the transcript for corrections…");
     setError("");
     try {
@@ -394,21 +446,23 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(null);
+      actionRunning.current = false; setBusy(null);
     }
   }
 
   async function acceptCorrection(wordId: string, suggested: string) {
-    if (!project) return;
-    await mutate("applyCorrection", { correction: { wordId, suggested } });
+    if (locked) return;
+    snapshot();
     for (const w of project.words) if (w.id === wordId) w.text = suggested;
     if (audit) for (const c of audit.corrections) if (c.wordId === wordId) c.applied = true;
-    setAudit({ ...audit! });
-    refreshFromLocal();
+    setAudit(audit ? { ...audit } : null);
+    refreshFromLocal(); persist();
   }
 
   async function runAgent() {
-    if (!agentCmd.trim()) return;
+    if (actionDisabled || saveQueue.isPending() || actionRunning.current) return;
+    actionRunning.current = true;
+    if (!agentCmd.trim()) { actionRunning.current = false; return; }
     setBusy("Your assistant is editing the transcript…");
     setError("");
     snapshot();
@@ -430,7 +484,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
       // An interrupted assistant can have saved partial edits; show disk state.
       await load();
     } finally {
-      setBusy(null);
+      actionRunning.current = false; setBusy(null);
     }
   }
 
@@ -439,7 +493,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
     return (
       <main className="mx-auto max-w-3xl px-6 py-14">
         <p className="text-[var(--text-dim)]">{error || "Loading…"}</p>
-        <Link href="/" className="mt-4 inline-block text-[var(--accent)] hover:underline">← back</Link>
+        <Link onClick={guardNavigation} href="/" className="mt-4 inline-block text-[var(--accent)] hover:underline">← back</Link>
       </main>
     );
   }
@@ -450,6 +504,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
       ? `/api/projects/${id}/media?render=1&t=${project.lastRender!.renderedAt}`
       : `/api/projects/${id}/media`;
 
+  const exportCurrent = !!project.lastRender && project.lastRender.studioSound === project.studioSound && JSON.stringify(project.lastRender.cuts) === JSON.stringify(cuts);
   const previewDuration = playMode === "render" && project.lastRender ? project.lastRender.duration : progDur;
 
   return (
@@ -457,22 +512,24 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
       {/* ── top bar ── */}
       <a href="#transcript" className="skip-link">Skip to transcript</a>
       <header className="app-topbar editor-topbar">
-        <Link href="/" className="brand" title="All projects"><StudioMark /><span>descripto</span></Link>
+        <Link onClick={guardNavigation} href="/" className="brand" title="All projects"><StudioMark /><span>descripto</span></Link>
         <div className="topbar-divider" />
-        <Link href="/" className="breadcrumb">Projects</Link><span className="muted">/</span>
+        <Link onClick={guardNavigation} href="/" className="breadcrumb">Projects</Link><span className="muted">/</span>
         <span className="editor-project-name" title={project.name}>{project.name}</span>
         <div className="editor-top-actions">
-          <Link href="/settings" className="icon-button" aria-label="Settings" title="Settings"><Icon name="settings" size={17} /></Link>
-          <button onClick={undo} disabled={!history.current.length} className="icon-button" aria-label="Undo" title="Undo (⌘Z)"><Icon name="undo" size={17} /></button>
-          <button onClick={redo} disabled={!future.current.length} className="icon-button" aria-label="Redo" title="Redo (⇧⌘Z)"><Icon name="redo" size={17} /></button>
+          <Link onClick={guardNavigation} href={`/settings?returnTo=/editor/${id}`} className="icon-button" aria-label="Settings" title="Settings"><Icon name="settings" size={17} /></Link>
+          <button onClick={undo} disabled={locked || !history.current.length} className="icon-button" aria-label="Undo" title="Undo (⌘Z)"><Icon name="undo" size={17} /></button>
+          <button onClick={redo} disabled={locked || !future.current.length} className="icon-button" aria-label="Redo" title="Redo (⇧⌘Z)"><Icon name="redo" size={17} /></button>
+          <span className={`save-state ${saveStatus}`} role="status">{saveStatus === "saved" ? "All changes saved" : saveStatus === "saving" ? "Saving…" : "Not saved"}</span>
           <span className="topbar-divider" />
-          {project.transcribed && <a href={`/api/projects/${id}/srt`} className="btn-ghost captions-link" title="Download SRT captions"><Icon name="text" size={16} /> Captions</a>}
+          {project.transcribed && <a href={`/api/projects/${id}/srt`} onClick={e => { if (actionDisabled) e.preventDefault(); }} aria-disabled={actionDisabled} className="btn-ghost captions-link" title="Download SRT captions"><Icon name="text" size={16} /> Captions</a>}
           {renderProg && <button className="btn-danger" onClick={() => void stopExport()} disabled={cancellingRender}>{cancellingRender ? "Stopping…" : "Cancel export"}</button>}
-          <button onClick={render} disabled={!project.transcribed || !!renderProg || !!busy} className="btn-accent export-button"><Icon name="download" size={16} />{renderProg ? `Rendering ${renderProg.pct}%` : "Render video"}</button>
+          <button onClick={render} disabled={!project.transcribed || actionDisabled || progDur === 0 || !project.sourceWidth} className="btn-accent export-button"><Icon name="download" size={16} />{renderProg ? `Exporting ${renderProg.pct}%` : "Export video"}</button>
         </div>
       </header>
 
       {/* progress + status strips */}
+      {saveStatus === "error" && <div className="error-banner" role="alert"><span>Edits are kept in this window but have not been saved. {saveError}</span><button className="btn-soft" onClick={() => saveQueue.retry()}>Retry save</button></div>}
       {exportNotice && <div className="server-status" role="status"><span>{exportNotice}</span><button className="btn-ghost" aria-label="Dismiss export notice" onClick={() => setExportNotice("")}><Icon name="close" size={14} /></button></div>}
       {serverStatus && <div className="server-status" role="status">
         <span>{serverStatus === "restarting" ? "Reconnecting to your local studio…" : serverStatus === "failed" ? "The local server could not restart. Close and reopen Descripto. Your saved projects are safe." : "Reconnected. Retry your last action if it did not finish."}</span>
@@ -488,7 +545,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
       )}
       {(busy || error) && (
         <div role="status" className={`shrink-0 px-4 py-1.5 text-[12px] ${error ? "bg-[#3a1d1d] text-[#ff9d97]" : "bg-[#1d2438] text-[#a9b8ff]"}`}>
-          {error || busy}
+          {error || busy}{error && <button className="btn-ghost" aria-label="Dismiss error" onClick={() => setError("")}><Icon name="close" size={14} /></button>}
         </div>
       )}
 
@@ -497,17 +554,18 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
         <section className="transcript-panel" aria-label="Transcript editor">
           <div className="panel-heading"><span><Icon name="text" size={16} /> Transcript</span><span className="panel-heading-meta">{words.filter(w => !w.deleted).length} words</span></div>
           <div className="transcript-tools">
-            <label className="search-field"><Icon name="search" size={15} /><input aria-label="Find a word in transcript" placeholder="Find a word…" value={search} onChange={e => setSearch(e.target.value)} />{search && <button onClick={() => setSearch("")} aria-label="Clear transcript search"><Icon name="close" size={14} /></button>}</label>
-            {searchTerm && <span className="search-count" role="status">{matches.length} matches</span>}
+            <label className="search-field"><Icon name="search" size={15} /><input aria-label="Find a word in transcript" placeholder="Find a word…" value={search} onChange={e => { setSearch(e.target.value); setMatchIndex(-1); }} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); findMatch(e.shiftKey ? -1 : 1); } }} />{search && <button onClick={() => setSearch("")} aria-label="Clear transcript search"><Icon name="close" size={14} /></button>}</label>
+            {searchTerm && <span className="search-count" role="status">{matchIndex >= 0 && matches.length ? `${Math.min(matchIndex + 1, matches.length)} / ` : ""}{matches.length} matches</span>}
+            {searchTerm && <><button className="icon-button" disabled={!matches.length} onClick={() => findMatch(-1)} aria-label="Previous match">↑</button><button className="icon-button" disabled={!matches.length} onClick={() => findMatch(1)} aria-label="Next match">↓</button></>}
             <button className="btn-ghost cuts-toggle" aria-pressed={!hideCuts} onClick={() => { setHideCuts(!hideCuts); setSelection(new Set()); }}><Icon name="eye" size={15} />{hideCuts ? "Show cuts" : "Hide cuts"}</button>
           </div>
           {/* script document */}
-          <div className="script" id="transcript">
-            <div className="document-title"><span className="eyebrow">THE SCRIPT</span><h1>{project.name}</h1><p>{project.transcribed ? "Select words to make a cut. Click a word to play from there." : "Turn your recording into a script you can edit."}</p></div>
+          <div className="script" id="transcript" tabIndex={-1}>
+            <div className="document-title"><span className="eyebrow">THE SCRIPT</span><h1>{project.name}</h1><p>{project.transcribed ? "Click a word to play. Drag or Shift-click to select; Delete to cut." : "Turn your recording into a script you can edit."}</p></div>
             {!project.transcribed ? (
               <div className="transcript-empty">
                 <span className="empty-icon"><Icon name="wave" size={30} /></span><h2>Every edit starts with a word.</h2><p>Transcribe your recording to find, trim and refine your story.</p>
-                <button onClick={transcribe} disabled={!!busy} className="btn-accent mt-5 px-6 py-2.5 text-[14px]">
+                <button onClick={transcribe} disabled={actionDisabled} className="btn-accent mt-5 px-6 py-2.5 text-[14px]">
                   {busy ? "Transcribing…" : "Create transcript"}
                 </button>
                 <p className="mt-3 text-[12px] text-[var(--text-dim)]">{fmtTime(project.sourceDuration)} of media · word-level</p>
@@ -536,14 +594,15 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
                             <span
                               key={w.id}
                               id={`word-${w.id}`}
-                              className={`word ${w.deleted ? "deleted" : ""} ${w.filler ? "filler" : ""} ${activeWord.current === w.id ? "active" : ""} ${selection.has(w.id) ? "selected" : ""} ${searchTerm && w.text.toLocaleLowerCase().includes(searchTerm) ? "search-match" : ""}`}
+                              className={`word ${w.deleted ? "deleted" : ""} ${w.filler ? "filler" : ""} ${activeWord.current === w.id ? "active" : ""} ${selection.has(w.id) ? "selected" : ""} ${matches[matchIndex]?.id === w.id ? "current-match" : ""} ${searchTerm && w.text.toLocaleLowerCase().includes(searchTerm) ? "search-match" : ""}`}
                               role="button"
-                              tabIndex={0}
+                              tabIndex={w.id === tabStopWord ? 0 : -1}
+                              onFocus={() => setFocusedWord(w.id)}
                               aria-label={`${w.text}${w.deleted ? ", cut" : ""}, ${fmtTime(sourceToProgram(cuts, w.start))}`}
-                              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); seekSource(w.start); } if (e.key === " ") { e.preventDefault(); setSelection(new Set([w.id])); } }}
+                              onKeyDown={e => wordKeyDown(e, idx)}
                               onMouseDown={(e) => wordMouseDown(e, idx)}
                               onMouseEnter={() => wordMouseEnter(idx)}
-                              onClick={() => selection.size <= 1 && seekSource(w.start)}
+                              onClick={() => !rangeGesture.current && selection.size <= 1 && seekSource(w.start)}
                             >
                               {w.text}{" "}
                             </span>
@@ -563,22 +622,25 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
               <div className="selection-controls pointer-events-auto">
                 <span className="pl-2 text-[12px] text-[var(--text-dim)]">{selection.size} selected</span>
                 <button
+                  disabled={locked || !words.some(w => selection.has(w.id) && !w.deleted)}
                   onClick={() => setDeleted([...selection], true)}
                   className="btn-danger"
                 >
                   Delete ⌫
                 </button>
                 <button
+                  disabled={locked || !words.some(w => selection.has(w.id) && w.deleted)}
                   onClick={() => setDeleted([...selection], false)}
                   className="btn-soft"
                 >
                   Restore
                 </button>
+                <button className="icon-button" aria-label="Clear selection" onClick={() => setSelection(new Set())}><Icon name="close" size={14} /></button>
               </div>
             </div>
           )}
 
-          {project.transcribed && <EditedTimeline clock={clock} videoRef={videoRef} duration={progDur} seek={time => {
+          {project.transcribed && <EditedTimeline clock={timelineClock} onToggle={() => { const video = videoRef.current; if (!video) return; if (!video.paused) { video.pause(); return; } const elapsed = timelineClock.getSnapshot().time; const time = elapsed >= progDur - 0.025 ? 0 : elapsed; if (playMode === "render") { pendingPreview.current = { time: programToSource(cuts, time), playing: true }; setPlayMode("source"); } else { seekEdited(time); void video.play().catch(() => {}); } }} videoRef={videoRef} duration={progDur} seek={time => {
             if (playMode === "render") {
               pendingPreview.current = { time: programToSource(cuts, time), playing: !videoRef.current?.paused };
               setPlayMode("source");
@@ -594,13 +656,13 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
           <div className="preview-panel">
             <div className="preview-tabs">
               <button
-                onClick={() => setPlayMode("source")}
+                onClick={() => switchPreview("source")}
                 aria-pressed={playMode === "source"}
               >
                 Live preview
               </button>
               <button
-                onClick={() => hasRender && setPlayMode("render")}
+                onClick={() => hasRender && switchPreview("render")}
                 disabled={!hasRender}
                 aria-pressed={playMode === "render"}
               >
@@ -608,12 +670,15 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
               </button>
             </div>
             <div className="video-player">
-              <video ref={videoRef} src={videoSrc} preload="auto" playsInline className="preview-video" onError={() => setError("This video could not be loaded. Check that the original media file is still available.")} />
+              <video ref={videoRef} src={videoSrc} preload="auto" playsInline className="preview-video" onLoadedData={() => setMediaError(false)} onError={() => setMediaError(true)} />
               <VideoControls clock={clock} videoRef={videoRef} duration={previewDuration} seek={seekEdited} />
             </div>
+            {mediaError && <div className="preview-error" role="alert"><span>Preview could not load. Reconnect or check the original media file.</span><button className="btn-soft" onClick={() => videoRef.current?.load()}>Retry preview</button></div>}
             <p className="mt-2 text-[11px] text-[var(--text-dim)]">
-              {playMode === "source" ? "Your cuts are applied live. Ready to export anytime." : "Watching your last rendered export."}
+              {playMode === "source" ? "Your cuts are applied live. Ready to export anytime." : exportCurrent ? "Watching your current export." : "Earlier export. Switch to Live preview to see your latest cuts."}
             </p>
+            {hasRender && <div className="export-download"><span>{exportCurrent ? "Export matches current cuts" : "Last export · earlier edit"}</span><a className="btn-soft" href={`/api/projects/${id}/media?render=1&download=1`}><Icon name="download" size={14} /> Download MP4</a></div>}
+            {!project.sourceWidth && <p className="muted text-[11px]">Audio recordings support transcription and captions. MP4 export requires a video.</p>}
           </div>
 
           {/* actions panel */}
@@ -624,15 +689,13 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
             <div className="card refinement-card flex items-center justify-between">
               <div className="pr-3">
                 <p className="text-[13px] font-medium">Studio Sound</p>
-                <p className="mt-0.5 text-[11px] leading-snug text-[var(--text-dim)]">Reduce background noise and balance your voice on export. <Link href="/settings" className="underline">Audio settings</Link></p>
+                <p className="mt-0.5 text-[11px] leading-snug text-[var(--text-dim)]">Reduce background noise and balance your voice on export. <Link onClick={guardNavigation} href={`/settings?returnTo=/editor/${id}`} className="underline">Audio settings</Link></p>
               </div>
               <button
                 type="button" role="switch" aria-label="Studio Sound" aria-checked={project.studioSound}
                 className={`switch ${project.studioSound ? "on" : ""}`}
-                onClick={() => {
-                  setProject({ ...project, studioSound: !project.studioSound });
-                  void mutate("setStudioSound", { studioSound: !project.studioSound });
-                }}
+                disabled={locked}
+                onClick={() => { snapshot(); project.studioSound = !project.studioSound; refreshFromLocal(); persist(); }}
               />
             </div>
 
@@ -644,8 +707,8 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
               </div>
               <p className="mt-0.5 text-[11px] leading-snug text-[var(--text-dim)]">Trim the “um”, “uh” and “you know” from your story.</p>
               <div className="mt-2.5 flex gap-2">
-                <button onClick={() => fillers(true)} disabled={!fillerCount || !!busy} className="btn-soft px-3 py-1 text-[12px]">Remove all</button>
-                <button onClick={() => fillers(false)} disabled={!words.some(w => w.filler && w.deleted) || !!busy} className="btn-soft px-3 py-1 text-[12px]">Restore all</button>
+                <button onClick={() => fillers(true)} disabled={!fillerCount || actionDisabled} className="btn-soft px-3 py-1 text-[12px]">Remove all</button>
+                <button onClick={() => fillers(false)} disabled={!words.some(w => w.filler && w.deleted) || actionDisabled} className="btn-soft px-3 py-1 text-[12px]">Restore all</button>
               </div>
             </div>
 
@@ -655,6 +718,8 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
                 <button
                   key={t}
                   onClick={() => setTab(t)}
+                  tabIndex={tab === t ? 0 : -1}
+                  onKeyDown={e => { const tabs: Tab[] = ["agent", "review", "audit"]; const direction = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0; if (direction) { e.preventDefault(); const next = tabs[(tabs.indexOf(t) + direction + tabs.length) % tabs.length]; setTab(next); document.getElementById(`tab-${next}`)?.focus(); } }}
                   role="tab" aria-selected={tab === t} aria-controls={`panel-${t}`} id={`tab-${t}`}
                 >
                   <Icon name={t === "review" ? "eye" : t === "audit" ? "check" : "spark"} size={14} />{t === "review" ? "Review" : t === "audit" ? "Proofread" : "Assistant"}
@@ -664,7 +729,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
 
             {tab === "review" && (
               <div className="assistant-content" role="tabpanel" id="panel-review" aria-labelledby="tab-review">
-                <button onClick={runReview} disabled={!hasRender || !!busy} className="btn-accent mb-2.5 w-full px-3 py-2 text-[12.5px]">
+                <button onClick={runReview} disabled={!hasRender || actionDisabled} className="btn-accent mb-2.5 w-full px-3 py-2 text-[12.5px]">
                   Review rendered video
                 </button>
                 {!hasRender && <p className="text-[11px] text-[var(--text-dim)]">Render your edit first. The review checks the finished video for rough cuts and audio issues.</p>}
@@ -682,7 +747,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
                         className={`card p-2.5 ${iss.severity === "error" ? "border-[#6d2f2b]" : iss.severity === "warning" ? "border-[#6d5a24]" : ""}`}
                       >
                         <div className="flex items-center justify-between">
-                          <span className="font-mono text-[11px] text-[var(--accent)]">{fmtTime(iss.timestamp)}</span>
+                          <button className="btn-ghost font-mono text-[11px] text-[var(--accent)]" disabled={!hasRender || review.reviewedFile !== project.lastRender?.file} aria-label={`Preview review issue at ${fmtTime(iss.timestamp)}`} onClick={() => switchPreview("render", iss.timestamp)}>{fmtTime(iss.timestamp)}</button>
                           <span className="rounded-full bg-[#2e2e2e] px-2 py-0.5 text-[10px] text-[var(--text-dim)]">{iss.kind}</span>
                         </div>
                         <p className="mt-1 text-[12px] leading-relaxed">{iss.note}</p>
@@ -695,7 +760,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
 
             {tab === "audit" && (
               <div className="assistant-content" role="tabpanel" id="panel-audit" aria-labelledby="tab-audit">
-                <button onClick={runAudit} disabled={!project.transcribed || !!busy} className="btn-accent mb-2.5 w-full px-3 py-2 text-[12.5px]">
+                <button onClick={runAudit} disabled={!project.transcribed || actionDisabled} className="btn-accent mb-2.5 w-full px-3 py-2 text-[12.5px]">
                   Check transcript
                 </button>
                 {audit && (
@@ -711,7 +776,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
                         </p>
                         <p className="mt-0.5 text-[10.5px] text-[var(--text-dim)]">{Math.round(c.confidence * 100)}% · {c.reason}</p>
                         {!c.applied ? (
-                          <button onClick={() => acceptCorrection(c.wordId, c.suggested)} className="btn-soft mt-1.5 px-3 py-1 text-[11px]">
+                          <button disabled={locked} onClick={() => acceptCorrection(c.wordId, c.suggested)} className="btn-soft mt-1.5 px-3 py-1 text-[11px]">
                             Accept
                           </button>
                         ) : (
@@ -733,12 +798,13 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
                 <div className="edit-composer">
                 <textarea
                   aria-label="Describe an edit"
+                  onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void runAgent(); } }}
                   value={agentCmd}
                   onChange={(e) => setAgentCmd(e.target.value)}
                   placeholder="What would you like to change?"
                   className="w-full resize-none"
                 />
-                <div className="composer-actions"><button onClick={runAgent} disabled={!!busy || !agentCmd.trim()} className="btn-accent">
+                <div className="composer-actions"><button onClick={runAgent} disabled={actionDisabled || !project.transcribed || !agentCmd.trim()} className="btn-accent">
                   Apply edit <Icon name="arrow" size={13} />
                 </button></div></div>
                 <div className="agent-log mt-3 space-y-1 whitespace-pre-wrap text-[12px] leading-relaxed text-[var(--text-dim)]">

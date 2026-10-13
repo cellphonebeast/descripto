@@ -21,10 +21,13 @@ export async function GET() {
 // buffering, no 10x RAM amplification). The browser sends the File
 // directly as the fetch body; curl can do --data-binary @file.
 export async function POST(req: NextRequest) {
+  let createdDir: string | undefined;
   try {
+    if (req.nextUrl.pathname === "/api/projects" && !req.body) return NextResponse.json({ error: "Choose a media file to import." }, { status: 400 });
     const name = req.nextUrl.searchParams.get("name") || "Untitled";
     const id = newId();
     const dir = projectDir(id);
+    createdDir = dir;
     fs.mkdirSync(dir, { recursive: true });
 
     const ext = path.extname(name) || ".mp4";
@@ -60,6 +63,7 @@ export async function POST(req: NextRequest) {
     saveProject(state);
     return NextResponse.json({ id });
   } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    if (createdDir) fs.rmSync(createdDir, { recursive: true, force: true });
+    return NextResponse.json({ error: "Could not open this recording. Check that it is a valid video or audio file and try again." }, { status: 400 });
   }
 }

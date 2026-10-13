@@ -146,7 +146,7 @@ Saved settings take precedence over environment values. **Disconnect** disables 
 4. **Preview.** Click a word to play from it, or seek with either edited-time scrubber. Cuts are skipped live; rendering is unnecessary for ordinary preview.
 5. **Restore or undo.** Use **Show cuts** to reveal removed words, select them, and choose Restore. Use the Undo/Redo buttons for recent changes. Undo history resets when the editor reloads; saved cut flags remain available through Show cuts.
 6. **Optionally refine.** Remove detected fillers, request an assistant edit, or run Proofread and accept individual suggestions. Review the results before exporting—filler detection is heuristic, and words such as “like” may be meaningful.
-7. **Render video.** Start an export when ready. The progress bar shows its stage. Use **Cancel export** to stop; the control is recovered if you reload while a job is running. Closing the desktop app also stops its local encoder processes.
+7. **Export video.** Start an export when ready. The progress bar shows its stage. Use **Cancel export** to stop; the control is recovered if you reload while a job is running. Closing the desktop app also stops its local encoder processes.
 8. **Use the result.** **Last export** plays the most recent completed MP4. Find the output under `projects/<project-id>/renders/` in this checkout. **Captions** downloads SRT for the current edit. Video review analyzes the completed export, so render again before reviewing newer edits.
 
 Edits save to disk as you make them. Source media is preserved; cutting a word changes the project's edit decisions, not the original recording. Cancelling an export does not undo your cuts.
@@ -283,3 +283,19 @@ GitHub Actions installs dependencies from the lockfile and runs tests, type chec
 Descripto's source is released under the [MIT License](LICENSE). Third-party packages, FFmpeg, and external provider services retain their own licenses and terms. No third-party binaries, personal recordings, projects, or credentials are distributed in this repository.
 
 Descripto is an independent community project and is not affiliated with or endorsed by Descript, Anthropic, Google, Groq, or Auphonic.
+
+### Editing and recovery
+
+- Edits update the script, preview, and timeline immediately, then save in order. The header shows **All changes saved**, **Saving**, or **Not saved**. A failed save retains the newest edit in the current window; choose **Retry save** before leaving or closing it.
+- Undo and Redo restore cuts, accepted transcript corrections, and Studio Sound changes together. History lasts for the current editor session.
+- Click a word to play. Drag or Shift-click to select a range, then Delete to cut. For keyboard editing, Tab into the transcript, use Left/Right to move between words, Shift+Left/Right to select, Space to select one word, Enter to play, and Escape to clear selection.
+- Search with Enter/Shift+Enter or the next/previous buttons. Each match scrolls into view without starting playback.
+- Both playback sliders use the edited duration. Left/Right moves five seconds; Home/End moves to the start/end. The timeline always represents the current edit, even while previewing an older export.
+- **Last export** is labelled when it differs from the current cuts or Studio Sound setting. **Download MP4** downloads that completed file. Cancelling a new export preserves the previous completed export.
+- Editing and AI actions are paused during export to keep its result consistent. Cancel remains available, including after reloading the editor.
+- Audio-only recordings support transcripts and captions; MP4 export requires a video track.
+- Connections opened from an editor include **Back to editor**. Press Enter in a key field to save. Credentials are never returned to the browser after saving.
+
+### Workflow verification
+
+The regression suite covers serialized saves and retry recovery, atomic undo snapshots, cut/time mapping, provider connection mocks, Auphonic processing/cancellation, encoder termination, and desktop server lifecycle. Run `pnpm test`, `pnpm typecheck`, and `pnpm build` before distributing a change. Paid cloud results depend on the configured account, model access, and provider availability; mocked checks do not certify a live account.
