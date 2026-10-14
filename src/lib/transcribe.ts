@@ -4,7 +4,8 @@ import type { Word } from "./types";
 import { extractAudio } from "./ffmpeg";
 import { runProcess } from "./subprocess";
 import { groqKey } from "./env";
-import { readWav, snapWordBoundaries } from "./audio-envelope";
+import { findQuietRegions, PAUSE_ANALYSIS_VERSION, readWav, snapWordBoundaries } from "./audio-envelope";
+export { PAUSE_ANALYSIS_VERSION };
 const run = (bin: string, args: string[]) => runProcess(bin, args);
 
 // ── Transcription ───────────────────────────────────────────────────────────
@@ -14,6 +15,8 @@ const run = (bin: string, args: string[]) => runProcess(bin, args);
 export interface TranscribeResult {
   words: Word[];
   engine: string;
+  pauses?: { start: number; end: number }[]; // quiet stretches of the audio (ADR-004)
+  pausesVersion?: number;
 }
 
 interface RawWord {
@@ -124,15 +127,28 @@ function normalizeWords(raw: RawWord[]): Word[] {
   return out;
 }
 
-// Snap shared word boundaries into the audio (ADR-003). A WAV we cannot read
-// leaves whisper's timestamps as they are; transcription still succeeds.
-function snapToAudio(words: Word[], wav: string): Word[] {
+// Snap shared word boundaries into the audio (ADR-003) and find its quiet
+// stretches (ADR-004). A WAV we cannot read leaves whisper's timestamps as they
+// are and no pauses; transcription still succeeds.
+function withAudio(words: Word[], wav: string, engine: string): TranscribeResult {
   try {
-    snapWordBoundaries(words, readWav(wav));
+    const pcm = readWav(wav);
+    snapWordBoundaries(words, pcm);
+    return { words, engine, pauses: findQuietRegions(pcm), pausesVersion: PAUSE_ANALYSIS_VERSION };
   } catch (e) {
     console.warn(`[transcribe] envelope snap skipped: ${(e as Error).message}`);
+    return { words, engine };
   }
-  return words;
+}
+
+// Quiet stretches for a project analyzed by an older detector (or none); null when the WAV is unusable.
+export function pausesFromWav(wav: string): { start: number; end: number }[] | null {
+  try {
+    return findQuietRegions(readWav(wav));
+  } catch (e) {
+    console.warn(`[pauses] could not analyze ${wav}: ${(e as Error).message}`);
+    return null;
+  }
 }
 
 export async function transcribe(source: string, workDir: string): Promise<TranscribeResult> {
@@ -141,7 +157,7 @@ export async function transcribe(source: string, workDir: string): Promise<Trans
   const errors: string[] = [];
   try {
     const r = await transcribeGroq(wav);
-    if (r.words.length > 0) return { words: snapToAudio(normalizeWords(r.words), wav), engine: "groq/whisper-large-v3-turbo" };
+    if (r.words.length > 0) return withAudio(normalizeWords(r.words), wav, "groq/whisper-large-v3-turbo");
     errors.push("groq returned 0 words");
   } catch (e) {
     errors.push(`groq: ${(e as Error).message}`);
@@ -149,7 +165,7 @@ export async function transcribe(source: string, workDir: string): Promise<Trans
   console.warn(`[transcribe] Groq unavailable, falling back to local whisper: ${errors.join("; ")}`);
   try {
     const r = await transcribeLocal(wav);
-    if (r.words.length > 0) return { words: snapToAudio(normalizeWords(r.words), wav), engine: `local whisper (${process.env.LOCAL_WHISPER_MODEL || "small"})` };
+    if (r.words.length > 0) return withAudio(normalizeWords(r.words), wav, `local whisper (${process.env.LOCAL_WHISPER_MODEL || "small"})`);
     errors.push("local whisper returned 0 words");
   } catch (e) {
     errors.push(`local: ${(e as Error).message}`);

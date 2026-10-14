@@ -36,9 +36,18 @@ export interface ProjectState {
   words: Word[];
   paragraphs: Paragraph[];
   studioSound: boolean; // apply audio enhancement on render
+  pauses?: { start: number; end: number }[]; // quiet stretches of the audio (ADR-004), from audio16k.wav
+  pausesVersion?: number; // detection version that produced `pauses`
+  tightenPauses?: PauseSettings; // "Tighten pauses" setting; absent = off
   lastRender?: RenderInfo;
   lastReview?: ReviewReport;
   lastAudit?: AuditReport;
+}
+
+export interface PauseSettings {
+  enabled: boolean;
+  minGap: number; // seconds; only pauses at least this long are tightened
+  margin: number; // seconds of the pause kept on each side
 }
 
 export interface RenderInfo {

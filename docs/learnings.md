@@ -32,7 +32,14 @@ Bug-fix and surprise forensics. Format: Date / Symptom / Root Cause / Fix Applie
 - **Prevention:** do not use word spans as a speech witness on zero-gap transcripts; check a
   word's own audio level before trusting it.
 
-## Open (2026-10-14, not yet measured)
+## 2026-10-14 — Background sound between words is rare and short; no rule change
 
-- Carlos reports background sound while not talking kept stretches from being cut under the
-  fixed -50 dBFS floor. Needs a measurement (noise-floor level in those stretches) before a fix.
+- **Symptom:** Carlos heard background sound in the export where he was not talking.
+- **Root Cause (measured, pmv8bmero5904aa):** non-word hops p10 -99 / p50 -80 / p90 -58.5 dBFS.
+  The -50 dBFS rule already cuts 194.2 of the 214.7 s in no-speech stretches >= 2 s. What stays
+  is 26.1 s in 32 gaps of 0.6-1.9 s with bursts peaking -25 to -30 dBFS (speech level).
+- **Fix Applied:** none. Dry run of "bridge loud runs that touch no spoken word": < 0.2 s gains
+  8 s and puts -31 dBFS inside cuts; < 0.5 s gains 10 s at -26 dBFS. Carlos: rare, skip it.
+- **Prevention:** before tuning detection, measure what the export KEEPS (kept no-speech gaps),
+  not just what the rule finds; a fix that cuts speech-level audio needs timestamps from the
+  listener first.

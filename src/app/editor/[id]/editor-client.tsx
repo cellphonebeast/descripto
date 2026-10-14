@@ -4,11 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { createPlaybackClock, EditedTimeline, VideoControls } from "@/components/edited-playback";
 import { Icon, StudioMark } from "@/components/studio-icon";
-import { computeCuts, programDuration, sourceToProgram, programToSource, type Range } from "@/lib/edl";
+import { DEFAULT_PAUSES, deriveCuts, pauseCuts, programDuration, sourceToProgram, programToSource, type Range } from "@/lib/edl";
+import type { PauseSettings } from "@/lib/types";
 import { nextPreviewTime } from "@/lib/preview";
 import { fmtTime, type AuditReport, type ProjectState, type ReviewReport } from "@/lib/types";
 
-import { captureEdits, applyEdits, createEditQueue, type EditState } from "@/lib/edit-state";
+import { captureEdits, applyEdits, createEditQueue, validPauseSettings, type EditState } from "@/lib/edit-state";
 
 type Tab = "review" | "audit" | "agent";
 
@@ -81,7 +82,10 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
   const tabStopWord = words.find(w => w.id === focusedWord && (!hideCuts || !w.deleted))?.id || words.find(w => !hideCuts || !w.deleted)?.id;
   const searchTerm = search.trim().toLocaleLowerCase();
   const matches = words.filter(w => (!hideCuts || !w.deleted) && searchTerm && w.text.toLocaleLowerCase().includes(searchTerm));
-  const cuts: Range[] = useMemo(() => computeCuts(words), [words]);
+  const cuts: Range[] = useMemo(() => deriveCuts({ words, pauses: project.pauses, tightenPauses: project.tightenPauses }), [words, project.pauses, project.tightenPauses]);
+  const pauseSettings = project.tightenPauses ?? DEFAULT_PAUSES;
+  const tightened = useMemo(() => pauseCuts(words, project.pauses, { ...pauseSettings, enabled: true }), [words, project.pauses, pauseSettings]);
+  const tightenedSec = tightened.reduce((sum, c) => sum + c.end - c.start, 0);
   const progDur = useMemo(
     () => (project ? programDuration(cuts, project.sourceDuration) : 0),
     [cuts, project],
@@ -132,6 +136,15 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
       if (w.filler) w.deleted = deleteThem;
     }
     refreshFromLocal();
+    persist();
+  }
+
+  function setPauses(next: PauseSettings) {
+    if (locked) return;
+    if (!validPauseSettings(next)) { setError("Keep each side shorter than half the minimum pause."); return; }
+    snapshot();
+    project.tightenPauses = next;
+    setProject((p) => (p ? { ...p, tightenPauses: next } : p));
     persist();
   }
 
@@ -709,6 +722,30 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
               <div className="mt-2.5 flex gap-2">
                 <button onClick={() => fillers(true)} disabled={!fillerCount || actionDisabled} className="btn-soft px-3 py-1 text-[12px]">Remove all</button>
                 <button onClick={() => fillers(false)} disabled={!words.some(w => w.filler && w.deleted) || actionDisabled} className="btn-soft px-3 py-1 text-[12px]">Restore all</button>
+              </div>
+            </div>
+
+            {/* Tighten pauses card (ADR-004) */}
+            <div className="card refinement-card">
+              <div className="flex items-center justify-between">
+                <p className="text-[13px] font-medium">Tighten pauses</p>
+                <button
+                  type="button" role="switch" aria-label="Tighten pauses" aria-checked={pauseSettings.enabled}
+                  className={`switch ${pauseSettings.enabled ? "on" : ""}`}
+                  disabled={actionDisabled || !project.pauses}
+                  onClick={() => setPauses({ ...pauseSettings, enabled: !pauseSettings.enabled })}
+                />
+              </div>
+              <p className="mt-0.5 text-[11px] leading-snug text-[var(--text-dim)]">
+                {!project.pauses ? "Pauses are not analyzed for this project yet." : `${tightened.length} pause${tightened.length === 1 ? "" : "s"} · ${tightenedSec.toFixed(1)}s ${pauseSettings.enabled ? "removed" : "to remove"}. Only stretches quieter than speech are shortened.`}
+              </p>
+              <div className="mt-2.5 flex gap-3 text-[11px] text-[var(--text-dim)]">
+                <label className="flex items-center gap-1">Pauses over
+                  <input type="number" min={0.3} max={60} step={0.1} value={pauseSettings.minGap} disabled={actionDisabled || !project.pauses} className="w-14 rounded border border-[var(--border)] bg-transparent px-1 py-0.5"
+                    onChange={(e) => setPauses({ ...pauseSettings, minGap: Number(e.target.value) })} />s</label>
+                <label className="flex items-center gap-1">Keep
+                  <input type="number" min={0} max={30} step={0.05} value={pauseSettings.margin} disabled={actionDisabled || !project.pauses} className="w-14 rounded border border-[var(--border)] bg-transparent px-1 py-0.5"
+                    onChange={(e) => setPauses({ ...pauseSettings, margin: Number(e.target.value) })} />s each side</label>
               </div>
             </div>
 

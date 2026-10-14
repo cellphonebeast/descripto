@@ -1,4 +1,4 @@
-import type { Word, Paragraph } from "./types";
+import type { Word, Paragraph, PauseSettings } from "./types";
 
 // ── Edit decision list math ─────────────────────────────────────────────────
 // Deleted words become time ranges to cut from the source. Ranges are padded
@@ -42,6 +42,40 @@ export function computeCuts(words: Word[]): Range[] {
     }
   }
   return merged;
+}
+
+// ── Tighten pauses (ADR-004) ──────────────────────────────────────────────────
+export const DEFAULT_PAUSES: PauseSettings = { enabled: false, minGap: 1.0, margin: 0.25 };
+
+// Pauses come from the audio alone (findQuietRegions): whisper stretches words
+// across silence and invents words on it, so a word inside a pause does not veto it.
+export function pauseCuts(words: Word[], pauses: Range[] | undefined, settings: PauseSettings | undefined): Range[] {
+  if (!settings?.enabled || !pauses?.length) return [];
+  const out: Range[] = [];
+  for (const p of pauses) {
+    if (p.end - p.start + 1e-9 < settings.minGap) continue; // tolerance: an exact-minGap pause qualifies at any position
+    const start = p.start + settings.margin, end = p.end - settings.margin;
+    if (end - start + 1e-9 >= MIN_CUT) out.push({ start, end });
+  }
+  return out;
+}
+
+function mergeRanges(ranges: Range[]): Range[] {
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  const merged: Range[] = [];
+  for (const r of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && r.start <= last.end + 0.001) last.end = Math.max(last.end, r.end);
+    else merged.push({ ...r });
+  }
+  return merged;
+}
+
+// The one cut list every consumer uses: deleted words plus tightened pauses.
+export function deriveCuts(project: { words: Word[]; pauses?: Range[]; tightenPauses?: PauseSettings }): Range[] {
+  const words = computeCuts(project.words);
+  const pauses = pauseCuts(project.words, project.pauses, project.tightenPauses);
+  return pauses.length ? mergeRanges([...words, ...pauses]) : words;
 }
 
 // Inverse: the segments of the source that survive.

@@ -123,3 +123,38 @@ export function snapWordBoundaries(words: { start: number; end: number; rawStart
   }
   return moved;
 }
+
+// ── Quiet regions (Tighten pauses, ADR-004) ─────────────────────────────────
+export const QUIET_DBFS = -50; // speech here sits around -35 dBFS (p50); -40 caught quiet speech
+export const QUIET_MIN_SEC = 0.3; // shortest region stored; the user's min pause filters further
+export const BLIP_SEC = 0.02; // a sound shorter than this (a click) does not end a pause; 60 ms let a soft "if you" through
+export const PAUSE_ANALYSIS_VERSION = 3; // bump when detection changes so stored pauses are re-analyzed
+const EPS = 1e-9; // float tolerance: a region of exactly minSec is kept wherever it starts
+
+// Stretches of the recording at or below `floorDb`, ignoring loud blips shorter
+// than `blipSec`. Audio only by design: whisper stretches words across silence and
+// invents words on it ("Thank you."), so the transcript cannot veto a pause.
+export function findQuietRegions(pcm: Pcm, floorDb = QUIET_DBFS, minSec = QUIET_MIN_SEC, blipSec = BLIP_SEC): { start: number; end: number }[] {
+  const hopSec = HOP_US / 1_000_000;
+  const env = envelopeDbfs(pcm);
+  const quiet = Array.from(env, (d) => d <= floorDb);
+  const blipHops = Math.round(blipSec / hopSec);
+  for (let i = 0; i < quiet.length; ) {
+    if (quiet[i]) { i++; continue; }
+    let j = i;
+    while (j < quiet.length && !quiet[j]) j++;
+    if (j - i < blipHops && i > 0 && j < quiet.length) for (let k = i; k < j; k++) quiet[k] = true;
+    i = j;
+  }
+  const out: { start: number; end: number }[] = [];
+  const total = pcm.samples.length / pcm.sampleRate;
+  for (let i = 0; i < quiet.length; ) {
+    if (!quiet[i]) { i++; continue; }
+    let j = i;
+    while (j < quiet.length && quiet[j]) j++;
+    const start = +(i * hopSec).toFixed(3), end = Math.min(total, +(j * hopSec).toFixed(3)); // clamp after rounding
+    if (end - start + EPS >= minSec) out.push({ start, end });
+    i = j;
+  }
+  return out;
+}
