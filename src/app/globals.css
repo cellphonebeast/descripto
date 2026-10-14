@@ -133,6 +133,7 @@ video { background: #101412; }
 .refinement-card.card { background: transparent; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 14px 0; margin: 0; }
 .refinement-card:first-of-type { padding-top: 2px; }
 .inspector-tools .refinement-card .btn-soft { min-height: 26px; padding: 4px 9px; font-size: 10px; }
+.word.retake-bad:not(.deleted) { background: #d9908018; border-bottom: 1px solid #d99080a0; }.word.retake-good:not(.deleted) { border-bottom: 1px solid #b5e4ca80; }.retake-bad-text { color: #e3b2a8; }.retake-text:hover .retake-bad-text { text-decoration: underline; }
 .filler-count { border: 1px solid #d3bb8424; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-variant-numeric: tabular-nums; color: #cbbf9d; }
 .edit-composer { border: 1px solid #ffffff17; border-radius: 8px; background: #0f1712; box-shadow: inset 0 1px 3px #0002; }
 .edit-composer:focus-within { border-color: #86a492; box-shadow: 0 0 0 2px #b8d9c612; }

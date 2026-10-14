@@ -7,6 +7,7 @@ import { Icon, StudioMark } from "@/components/studio-icon";
 import { DEFAULT_PAUSES, deriveCuts, pauseCuts, programDuration, sourceToProgram, programToSource, type Range } from "@/lib/edl";
 import type { PauseSettings } from "@/lib/types";
 import { nextPreviewTime } from "@/lib/preview";
+import { findRetakes } from "@/lib/retakes";
 import { fmtTime, type AuditReport, type ProjectState, type ReviewReport } from "@/lib/types";
 
 import { captureEdits, applyEdits, createEditQueue, validPauseSettings, type EditState } from "@/lib/edit-state";
@@ -92,6 +93,8 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
   );
   const deletedCount = words.filter((w) => w.deleted).length;
   const fillerCount = words.filter((w) => w.filler && !w.deleted).length;
+  const retakes = useMemo(() => findRetakes(words, project.pauses, cuts), [words, project.pauses, cuts]);
+  const retakeIds = useMemo(() => ({ bad: new Set(retakes.flatMap((r) => r.bad.wordIds)), good: new Set(retakes.filter((r) => r.kind !== "keyword").flatMap((r) => r.good.wordIds)) }), [retakes]);
 
   // ── mutations ────────────────────────────────────────────────────────────
   const snapshot = useCallback(() => {
@@ -607,7 +610,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
                             <span
                               key={w.id}
                               id={`word-${w.id}`}
-                              className={`word ${w.deleted ? "deleted" : ""} ${w.filler ? "filler" : ""} ${activeWord.current === w.id ? "active" : ""} ${selection.has(w.id) ? "selected" : ""} ${matches[matchIndex]?.id === w.id ? "current-match" : ""} ${searchTerm && w.text.toLocaleLowerCase().includes(searchTerm) ? "search-match" : ""}`}
+                              className={`word ${w.deleted ? "deleted" : ""} ${w.filler ? "filler" : ""} ${retakeIds.bad.has(w.id) ? "retake-bad" : retakeIds.good.has(w.id) ? "retake-good" : ""} ${activeWord.current === w.id ? "active" : ""} ${selection.has(w.id) ? "selected" : ""} ${matches[matchIndex]?.id === w.id ? "current-match" : ""} ${searchTerm && w.text.toLocaleLowerCase().includes(searchTerm) ? "search-match" : ""}`}
                               role="button"
                               tabIndex={w.id === tabStopWord ? 0 : -1}
                               onFocus={() => setFocusedWord(w.id)}
@@ -723,6 +726,25 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
                 <button onClick={() => fillers(true)} disabled={!fillerCount || actionDisabled} className="btn-soft px-3 py-1 text-[12px]">Remove all</button>
                 <button onClick={() => fillers(false)} disabled={!words.some(w => w.filler && w.deleted) || actionDisabled} className="btn-soft px-3 py-1 text-[12px]">Restore all</button>
               </div>
+            </div>
+
+            {/* Repeated takes card (ADR-006) */}
+            <div className="card refinement-card">
+              <div className="flex items-center justify-between">
+                <p className="text-[13px] font-medium">Repeated takes</p>
+                <span className="filler-count">{retakes.length}</span>
+              </div>
+              <p className="mt-0.5 text-[11px] leading-snug text-[var(--text-dim)]">Earlier attempts in red, the take that stays in green. Nothing is cut until you choose.</p>
+              {retakes.length > 0 && <ul className="retake-list mt-2 space-y-1.5">
+                {retakes.map((r) => (
+                  <li key={r.bad.wordIds[0]} className="flex items-start gap-2 text-[11px]">
+                    <button type="button" className="retake-text min-w-0 flex-1 text-left" title={`Keeps: ${r.good.text}`} onClick={() => seekSource(r.bad.start)}>
+                      <span className="tabular-nums text-[var(--text-dim)]">{fmtTime(sourceToProgram(cuts, r.bad.start))}</span> <span className="retake-bad-text">{r.bad.text.length > 70 ? r.bad.text.slice(0, 70) + "…" : r.bad.text}</span>
+                    </button>
+                    <button type="button" onClick={() => setDeleted(r.bad.wordIds, true)} disabled={actionDisabled} className="btn-soft shrink-0 px-2 py-0.5 text-[11px]">Cut</button>
+                  </li>
+                ))}
+              </ul>}
             </div>
 
             {/* Tighten pauses card (ADR-004) */}

@@ -241,5 +241,27 @@ server.registerTool(
   },
 );
 
+server.registerTool(
+  "find_retakes",
+  {
+    title: "Find repeated takes",
+    description: "List repeated takes: an earlier attempt at a phrase (bad) followed by the take to keep (good), found by the same local detector the editor highlights (ADR-006). Read-only; delete a bad take's word ids with delete_words only if the user asked for cuts.",
+    inputSchema: {},
+  },
+  async () => {
+    let lib;
+    try {
+      lib = { retakes: await import("../src/lib/retakes.ts"), edl: await import("../src/lib/edl.ts") };
+    } catch (e) {
+      return { content: [{ type: "text", text: `retake detector unavailable on this Node (${process.version}; needs TypeScript type stripping): ${e.message}` }], isError: true };
+    }
+    const p = load();
+    const found = lib.retakes.findRetakes(p.words, p.pauses, lib.edl.deriveCuts(p));
+    if (!found.length) return { content: [{ type: "text", text: "no repeated takes found" }] };
+    const line = (r) => `${r.kind} ${r.similarity} | BAD ${r.bad.start.toFixed(2)}s [${r.bad.wordIds[0]}..${r.bad.wordIds[r.bad.wordIds.length - 1]}] "${r.bad.text}" | KEEP ${r.good.start.toFixed(2)}s "${r.good.text}"`;
+    return { content: [{ type: "text", text: found.map(line).join("\n") }] };
+  },
+);
+
 // ── run ─────────────────────────────────────────────────────────────────────
 await server.connect(new StdioServerTransport());
