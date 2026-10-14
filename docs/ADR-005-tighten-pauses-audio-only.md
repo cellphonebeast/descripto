@@ -89,3 +89,7 @@ consumer of `deriveCuts` (render, preview, CapCut, review, srt, MCP), with Tight
 **Tests:** 4 in `tests/silence.cjs`, written by a fresh agent. Mutants `MAX_SLIVER` 0.3→0.05, the
 speech check removed, and `<` → `<= 0` were each killed; `edl.ts` sha256 verified after restore.
 Suite: 96 pass under Node 24.
+
+**Update 2026-10-14 (tolerance test):** a kept word that overlaps the gap by 0.008 s does not
+block the merge, and one that overlaps by 0.02 s does (`tests/silence.cjs`). The mutant `> 0.01` →
+`> 0.0` was killed and sha256 was verified. Suite: 102 pass.

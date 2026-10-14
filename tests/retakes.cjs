@@ -5,7 +5,8 @@ const ts = require('typescript');
 require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, filename);
 const { similarity, segmentWords, findRetakes, findStutters, WINDOWED_THRESHOLD } = require('../src/lib/retakes.ts');
 const { DEFAULT_PAUSES } = require('../src/lib/edl.ts');
-const { parseAiRetakes, aiRetakePrompt } = require('../src/lib/retakes-ai.ts');
+const { parseAiRetakes, aiRetakePrompt, AI_RETAKE_SYSTEM_PROMPT, AI_RETAKE_MODEL, AI_RETAKE_EFFORT } = require('../src/lib/retakes-ai.ts');
+const crypto = require('node:crypto');
 
 // One word per 0.3 s; each sentence is its own phrase.
 const script = (...sentences) => {
@@ -14,6 +15,42 @@ const script = (...sentences) => {
   return words;
 };
 const summary = r => r.map(x => `${x.kind}: ${x.bad.text} -> ${x.good.text}`);
+
+// ── AI retake contract (ADR-007): model, effort, and the prompt pinned verbatim ─
+// capcut's core/ai_detector.py _SYSTEM_PROMPT, with AI_LOOK_AHEAD=10 substituted, hashes to this
+// sha256 (computed 2026-10-14 from capcut's own source via `python3 -I -c "import ast; ..."`,
+// confirmed byte-identical to the descripto constant with `diff`). A change to either copy, or
+// the two drifting apart, changes this hash.
+const CAPCUT_PROMPT_SHA256 = '186bea9535ab67c2256e9a6d4173186d306b59def47f586702e1832dcf1cc948';
+
+test('AI_RETAKE_SYSTEM_PROMPT is pinned to the exact capcut _SYSTEM_PROMPT (sha256)', () => {
+  const hash = crypto.createHash('sha256').update(AI_RETAKE_SYSTEM_PROMPT).digest('hex');
+  assert.equal(hash, CAPCUT_PROMPT_SHA256);
+});
+
+test('AI retake check runs claude-sonnet-5 at medium effort', () => {
+  assert.equal(AI_RETAKE_MODEL, 'claude-sonnet-5');
+  assert.equal(AI_RETAKE_EFFORT, 'medium');
+});
+
+// ── stutter cap (STUTTER_MAX_WORDS) ─────────────────────────────────────────
+// findStutters operates on the flat kept-word list directly (not through segmentWords, whose
+// SEGMENT_MAX_WORDS=25 would otherwise split a 26-word run before the cap could be exercised).
+const RUN_12 = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima';
+const RUN_13 = `${RUN_12} mike`;
+
+test('a 12-word run repeated back to back is flagged as a stutter (at the cap)', () => {
+  const words = script(`${RUN_12} ${RUN_12}.`);
+  const stutters = findStutters(words);
+  assert.equal(stutters.length, 1);
+  assert.equal(stutters[0].bad.text, RUN_12);
+  assert.equal(stutters[0].good.text, `${RUN_12}.`); // the trailing sentence period lands on the last word
+});
+
+test('a 13-word run repeated back to back is NOT flagged as a stutter (above the cap)', () => {
+  const words = script(`${RUN_13} ${RUN_13}.`);
+  assert.equal(findStutters(words).length, 0);
+});
 
 test('similarity matches difflib.SequenceMatcher.ratio on word lists', () => {
   // values computed with python3 difflib on the same inputs

@@ -56,3 +56,7 @@ XML import is used there only for DaVinci Resolve.
   produced `(descripto)` and `(descripto 2)`, each with 61 clips.
 - **Declined:** no automated test, because it needs CapCut's templates, ffmpeg and a real video.
   It was covered by the live run.
+
+**Evaluated and declined (2026-10-14):** a test of the Edit in CapCut button's enable rules
+(transcribed, video size known, program longer than 0, edits saved). It is UI only, with no React
+test harness. Live: the button stays disabled until "All changes saved".

@@ -81,3 +81,19 @@ verified by sha256 after restore. Suite: 92 pass under Node 24.
 
 **Declined:** `runAiRetakeCheck` (it spawns the real CLI), the route, and the editor auto-run.
 These were covered by the live runs above.
+
+## Update 2026-10-14 (final done-check)
+
+A coverage sweep by a separate agent found three cheap gaps. Another fresh agent added tests for
+them; suite now 102 pass under Node 24:
+- **Prompt pin:** `AI_RETAKE_SYSTEM_PROMPT` is pinned by sha256
+  (`186bea95…`). The agent extracted capcut's `_SYSTEM_PROMPT` read-only from
+  `core/ai_detector.py`, with `AI_LOOK_AHEAD=10`, and confirmed it byte-identical to descripto's.
+  `AI_RETAKE_MODEL` is `claude-sonnet-5` and `AI_RETAKE_EFFORT` is `medium`.
+- **Stutter cap:** a 12-word run repeated back to back is a stutter, and a 13-word run is not.
+
+The mutants (one prompt word changed, cap 12→13) were each killed, and sha256 was verified after
+restore.
+
+**Evaluated and declined:** the editor's AI check button and auto-run wiring, as before. There is
+no React test harness; they are covered by live runs.

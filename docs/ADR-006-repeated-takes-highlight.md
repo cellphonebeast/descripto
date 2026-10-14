@@ -134,3 +134,8 @@ Carlos asked for a **Cut all** button. It sits in the card header and shows when
 more retakes. It deletes every earlier take's words in one `setDeleted` call: one snapshot, so a
 single Undo restores them all. Keepers are never in a `bad` set after consolidation, so no kept
 take is cut. Live check on the test project: 6 retakes / 44 red words → 0 / 0, Undo → 6 / 44.
+
+**Evaluated and declined (2026-10-14):** an automated test of Cut all's wiring (one `setDeleted`
+call, shown only with 2 or more retakes). It is an inline React handler, and the repo has no
+component test harness. The undo-snapshot behaviour it relies on is covered by
+`tests/edit-state.cjs`, and the button was checked live (6 / 44 → 0 / 0, Undo → 6 / 44).

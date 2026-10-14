@@ -123,3 +123,19 @@ test('pauses on: a pause cut sitting 0.06 s from a word cut, with no kept word b
   const pauses = [{ start: 1.10, end: 2.10 }];
   assert.deepEqual(deriveCuts({ words, pauses, tightenPauses: on }), [{ start: 1, end: 1.85 }]);
 });
+
+// closeSlivers counts a kept word as speech in the gap only if it overlaps by MORE than 0.01 s
+// (strictly greater, not >=). Two cuts 0.2 s apart (under MAX_SLIVER=0.3) with a kept word
+// straddling the boundary between them at a controlled overlap depth.
+const sliverPauses = [{ start: 1.0, end: 1.2 }, { start: 1.4, end: 1.6 }];
+const sliverSettings = { enabled: true, minGap: 0.2, margin: 0 };
+
+test('a kept word overlapping the gap by 0.008 s (<= 0.01) does not prevent the sliver merge', () => {
+  const words = [word('w', 1.192, 1.208)]; // overlaps [1.2, 1.4) by exactly 0.008 s
+  assert.deepEqual(deriveCuts({ words, pauses: sliverPauses, tightenPauses: sliverSettings }), [{ start: 1.0, end: 1.6 }]);
+});
+
+test('a kept word overlapping the gap by 0.02 s (> 0.01) prevents the sliver merge', () => {
+  const words = [word('w', 1.192, 1.22)]; // overlaps [1.2, 1.4) by 0.02 s
+  assert.deepEqual(deriveCuts({ words, pauses: sliverPauses, tightenPauses: sliverSettings }), [{ start: 1.0, end: 1.2 }, { start: 1.4, end: 1.6 }]);
+});
