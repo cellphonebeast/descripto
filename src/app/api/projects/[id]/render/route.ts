@@ -33,7 +33,7 @@ export async function POST(_req: NextRequest, ctx: Context) {
       const info = await probe(p.sourceFile, signal);
       const cloudAudio = useAuphonic && info.hasAudio;
       if (cloudAudio && !audioKey) throw new Error("Add an Auphonic key in Settings → Connections or choose built-in Studio Sound.");
-      await renderProgram(p.sourceFile, out, keeps, { studioSound: p.studioSound && !cloudAudio, hasAudio: info.hasAudio, total, signal }, (frac, stage) => {
+      await renderProgram(p.sourceFile, out, keeps, { studioSound: p.studioSound && !cloudAudio, hasAudio: info.hasAudio, frameRate: info.frameRate, total, signal }, (frac, stage) => {
         if (signal.aborted) return;
         job.progress = Math.round(frac * (cloudAudio ? 65 : 100)); job.stage = stage;
       });

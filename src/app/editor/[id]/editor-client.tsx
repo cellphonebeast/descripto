@@ -561,7 +561,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
           </div>
           {/* script document */}
           <div className="script" id="transcript" tabIndex={-1}>
-            <div className="document-title"><span className="eyebrow">THE SCRIPT</span><h1>{project.name}</h1><p>{project.transcribed ? "Click a word to play. Drag or Shift-click to select; Delete to cut." : "Turn your recording into a script you can edit."}</p></div>
+            <div className="document-title"><span className="eyebrow">THE SCRIPT</span><h1>{project.name}</h1><p>{project.transcribed ? `Click a word to play. Drag or Shift-click to select; Delete to cut.${project.transcriptEngine ? ` Transcribed by ${project.transcriptEngine}.` : ""}` : "Turn your recording into a script you can edit."}</p></div>
             {!project.transcribed ? (
               <div className="transcript-empty">
                 <span className="empty-icon"><Icon name="wave" size={30} /></span><h2>Every edit starts with a word.</h2><p>Transcribe your recording to find, trim and refine your story.</p>

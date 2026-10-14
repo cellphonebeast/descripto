@@ -30,6 +30,7 @@ export interface ProjectState {
   sourceWidth?: number;
   sourceHeight?: number;
   transcribed: boolean;
+  transcriptEngine?: string; // which ASR produced `words` (groq/... or local whisper)
   words: Word[];
   paragraphs: Paragraph[];
   studioSound: boolean; // apply audio enhancement on render

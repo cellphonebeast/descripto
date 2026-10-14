@@ -2,7 +2,9 @@ import fs from "fs";
 import { spawn } from "child_process";
 import type { Word } from "./types";
 import { extractAudio } from "./ffmpeg";
+import { runProcess } from "./subprocess";
 import { groqKey } from "./env";
+const run = (bin: string, args: string[]) => runProcess(bin, args);
 
 // ── Transcription ───────────────────────────────────────────────────────────
 // Primary: Groq whisper-large-v3-turbo (fast, word-level timestamps).
@@ -19,10 +21,23 @@ interface RawWord {
   end: number;
 }
 
+// Groq rejects uploads over 25 MB (HTTP 413). The 16 kHz mono WAV used by local
+// whisper is ~2 MB per minute, so anything past ~13 minutes silently fell back
+// to the slow local engine. A 48 kbps mono MP3 is ~0.36 MB per minute, which
+// keeps a 70-minute recording under the cap.
+export const GROQ_UPLOAD_LIMIT = 25 * 1024 * 1024;
+export async function compressForUpload(wav: string, out = wav.replace(/\.wav$/, "") + ".upload.mp3"): Promise<string> {
+  await run("ffmpeg", ["-y", "-loglevel", "error", "-i", wav, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "48k", out]);
+  return out;
+}
+
 async function transcribeGroq(wav: string): Promise<{ words: RawWord[]; text: string }> {
   const key = groqKey();
   if (!key) throw new Error("Add a Groq API key in Settings → Connections, or install local Whisper.");
-  const buf = fs.readFileSync(wav);
+  const upload = await compressForUpload(wav);
+  let buf: Buffer;
+  try { buf = fs.readFileSync(upload); } finally { try { fs.unlinkSync(upload); } catch {} }
+  if (buf.length > GROQ_UPLOAD_LIMIT) throw new Error(`audio is ${(buf.length / 1048576).toFixed(0)} MB after compression; Groq accepts at most 25 MB`);
   const boundary = "----frm" + Math.random().toString(36).slice(2);
   const meta = JSON.stringify({
     model: "whisper-large-v3-turbo",
@@ -35,7 +50,7 @@ async function transcribeGroq(wav: string): Promise<{ words: RawWord[]; text: st
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\nverbose_json\r\n`),
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="timestamp_granularities[]"\r\n\r\nword\r\n`),
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\nen\r\n`),
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.wav"\r\nContent-Type: audio/wav\r\n\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.mp3"\r\nContent-Type: audio/mpeg\r\n\r\n`),
     buf,
     Buffer.from(`\r\n--${boundary}--\r\n`),
   ]);
@@ -119,6 +134,7 @@ export async function transcribe(source: string, workDir: string): Promise<Trans
   } catch (e) {
     errors.push(`groq: ${(e as Error).message}`);
   }
+  console.warn(`[transcribe] Groq unavailable, falling back to local whisper: ${errors.join("; ")}`);
   try {
     const r = await transcribeLocal(wav);
     if (r.words.length > 0) return { words: normalizeWords(r.words), engine: `local whisper (${process.env.LOCAL_WHISPER_MODEL || "small"})` };
