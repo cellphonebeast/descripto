@@ -39,9 +39,11 @@ test('cut word blocks collapse to seams and undo restores the original timeline'
   const words = Array.from({length:4}, (_, i) => ({id:`w${i}`, text:`word${i}`, start:i, end:i+1, deleted:false}));
   words[1].deleted = true;
   const cuts = computeCuts(words);
-  assert.equal(programDuration(cuts, 4), 3);
-  assert.equal(sourceToProgram(cuts, words[2].start), 1);
-  assert.equal(sourceToProgram(cuts, words[1].start), sourceToProgram(cuts, words[1].end));
+  // 125 ms of the deleted word survives on each side as a buffer for its kept neighbours.
+  assert.deepEqual(cuts, [{ start: 1.125, end: 1.875 }]);
+  assert.equal(programDuration(cuts, 4), 3.25);
+  assert.equal(sourceToProgram(cuts, words[2].start), 1.25);
+  assert.equal(sourceToProgram(cuts, words[1].start + 0.125), sourceToProgram(cuts, words[1].end - 0.125));
   words[1].deleted = false;
   assert.equal(programDuration(computeCuts(words), 4), 4);
   words.forEach(w => w.deleted = true);
