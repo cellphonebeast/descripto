@@ -206,3 +206,9 @@ input:disabled { opacity: .6; cursor: wait; }
 .export-download .btn-soft { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 10px; white-space: nowrap; }
 .btn-danger { border-radius: 5px; padding: 5px 10px; font-size: 11px; }
 .preview-error .btn-soft, .error-banner .btn-soft { padding: 5px 10px; }
+
+.panel-toggle { width: 100%; background: none; border-left: 0; border-right: 0; border-top: 0; cursor: pointer; text-align: left; }
+.panel-toggle:hover { background: var(--surface-hover, rgba(255,255,255,0.03)); }
+.panel-toggle .panel-heading-meta { display: flex; align-items: center; gap: 8px; }
+.panel-toggle .panel-heading-meta svg { transition: transform 0.15s; }
+.preview-panel[hidden] { display: none; }

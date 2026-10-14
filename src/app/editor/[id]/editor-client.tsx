@@ -42,6 +42,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
   }, (status, error) => { setSaveStatus(status); setSaveError(error || ""); }), [id]);
   const [search, setSearch] = useState("");
   const [hideCuts, setHideCuts] = useState(true);
+  const [previewOpen, setPreviewOpen] = useState(true);
   const [review, setReview] = useState<ReviewReport | null>(initialProject.lastReview || null);
   const [audit, setAudit] = useState<AuditReport | null>(initialProject.lastAudit || null);
   const [agentCmd, setAgentCmd] = useState("");
@@ -667,9 +668,9 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
 
         {/* ── right: player + actions ── */}
         <aside className="inspector">
-          <div className="panel-heading"><span><Icon name="film" size={16} /> Preview</span><span className="panel-heading-meta">{project.sourceWidth && project.sourceHeight ? `${project.sourceWidth} × ${project.sourceHeight}` : "Media"}</span></div>
-          {/* player */}
-          <div className="preview-panel">
+          <button type="button" className="panel-heading panel-toggle" aria-expanded={previewOpen} onClick={() => setPreviewOpen(o => !o)}><span><Icon name="film" size={16} /> Preview</span><span className="panel-heading-meta">{project.sourceWidth && project.sourceHeight ? `${project.sourceWidth} × ${project.sourceHeight}` : "Media"}<Icon name="chevron" size={14} style={{ transform: previewOpen ? "none" : "rotate(-90deg)" }} /></span></button>
+          {/* player: collapsed with CSS only, so the video stays mounted and word clicks still play */}
+          <div className="preview-panel" hidden={!previewOpen}>
             <div className="preview-tabs">
               <button
                 onClick={() => switchPreview("source")}
