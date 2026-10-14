@@ -1,45 +1,36 @@
 import type { Word, Paragraph } from "./types";
 
 // ── Edit decision list math ─────────────────────────────────────────────────
-// Deleted words become time ranges to cut from the source. Consecutive deleted
-// words fuse into one run, and each run's cut shrinks INWARD by KEEP_MARGIN on
-// any side that touches a kept word: transcript timestamps run early/late by
-// ~100 ms, so leaving a sliver of the deleted span protects the neighbour's
-// consonant release and onset. Padding never widens a cut into a kept word.
-// Overlapping/adjacent ranges merge.
+// Deleted words become time ranges to cut from the source. Ranges are padded
+// by half the surrounding inter-word gap (capped), like Descript, so cuts
+// don't clip consonants. Overlapping/adjacent ranges merge.
 
 export interface Range {
   start: number;
   end: number;
 }
 
-const KEEP_MARGIN = 0.125; // seconds of the deleted span left beside a kept word
+const MAX_PAD = 0.09; // seconds of padding each side
 const MIN_CUT = 0.06; // ignore absurdly tiny cuts
 
 export function computeCuts(words: Word[]): Range[] {
-  const ordered = [...words].sort((a, b) => a.start - b.start || a.end - b.end);
-  const deleted = ordered.filter((w) => w.deleted);
-  if (deleted.length === 0) return [];
-  if (deleted.length === ordered.length) return [{ start: 0, end: Infinity }];
+  const kept = words.filter((w) => !w.deleted);
+  const deleted = words.filter((w) => w.deleted);
+  if (deleted.length === 0 || kept.length === 0 && deleted.length === 0) return [];
+  if (kept.length === 0) return [{ start: 0, end: Infinity }];
 
   const raw: Range[] = [];
-  let i = 0;
-  while (i < ordered.length) {
-    if (!ordered[i].deleted) { i++; continue; }
-    const first = i;
-    let last = i;
-    while (last + 1 < ordered.length && ordered[last + 1].deleted) last++;
-    i = last + 1;
-    const runStart = ordered[first].start;
-    const runEnd = Math.max(...ordered.slice(first, last + 1).map((w) => w.end));
-    const leftKept = first > 0;
-    const rightKept = last + 1 < ordered.length;
-    const sides = (leftKept ? 1 : 0) + (rightKept ? 1 : 0);
-    const margin = sides ? Math.max(0, Math.min(KEEP_MARGIN, (runEnd - runStart - MIN_CUT) / sides)) : 0;
-    const start = leftKept ? runStart + margin : 0;
-    const end = rightKept ? runEnd - margin : runEnd;
-    if (end - start >= MIN_CUT - 1e-9) raw.push({ start, end });
+  for (const w of deleted) {
+    // neighbors in time order among ALL words
+    const prev = words.filter((x) => x.end <= w.start + 1e-6).pop();
+    const next = words.find((x) => x.start >= w.end - 1e-6 && x !== w);
+    const leftGap = prev ? Math.min((w.start - prev.end) / 2, MAX_PAD) : 0.02;
+    const rightGap = next ? Math.min((next.start - w.end) / 2, MAX_PAD) : 0.02;
+    const start = Math.max(0, w.start - leftGap);
+    const end = w.end + rightGap;
+    if (end - start >= MIN_CUT) raw.push({ start, end });
   }
+  raw.sort((a, b) => a.start - b.start);
 
   const merged: Range[] = [];
   for (const r of raw) {
