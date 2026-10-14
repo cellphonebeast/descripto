@@ -4,6 +4,7 @@ import type { Word } from "./types";
 import { extractAudio } from "./ffmpeg";
 import { runProcess } from "./subprocess";
 import { groqKey } from "./env";
+import { readWav, snapWordBoundaries } from "./audio-envelope";
 const run = (bin: string, args: string[]) => runProcess(bin, args);
 
 // ── Transcription ───────────────────────────────────────────────────────────
@@ -123,13 +124,24 @@ function normalizeWords(raw: RawWord[]): Word[] {
   return out;
 }
 
+// Snap shared word boundaries into the audio (ADR-003). A WAV we cannot read
+// leaves whisper's timestamps as they are; transcription still succeeds.
+function snapToAudio(words: Word[], wav: string): Word[] {
+  try {
+    snapWordBoundaries(words, readWav(wav));
+  } catch (e) {
+    console.warn(`[transcribe] envelope snap skipped: ${(e as Error).message}`);
+  }
+  return words;
+}
+
 export async function transcribe(source: string, workDir: string): Promise<TranscribeResult> {
   const wav = `${workDir}/audio16k.wav`;
   await extractAudio(source, wav);
   const errors: string[] = [];
   try {
     const r = await transcribeGroq(wav);
-    if (r.words.length > 0) return { words: normalizeWords(r.words), engine: "groq/whisper-large-v3-turbo" };
+    if (r.words.length > 0) return { words: snapToAudio(normalizeWords(r.words), wav), engine: "groq/whisper-large-v3-turbo" };
     errors.push("groq returned 0 words");
   } catch (e) {
     errors.push(`groq: ${(e as Error).message}`);
@@ -137,7 +149,7 @@ export async function transcribe(source: string, workDir: string): Promise<Trans
   console.warn(`[transcribe] Groq unavailable, falling back to local whisper: ${errors.join("; ")}`);
   try {
     const r = await transcribeLocal(wav);
-    if (r.words.length > 0) return { words: normalizeWords(r.words), engine: `local whisper (${process.env.LOCAL_WHISPER_MODEL || "small"})` };
+    if (r.words.length > 0) return { words: snapToAudio(normalizeWords(r.words), wav), engine: `local whisper (${process.env.LOCAL_WHISPER_MODEL || "small"})` };
     errors.push("local whisper returned 0 words");
   } catch (e) {
     errors.push(`local: ${(e as Error).message}`);

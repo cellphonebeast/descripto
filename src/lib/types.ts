@@ -14,6 +14,8 @@ export interface Word {
   deleted: boolean; // true = this word is cut from the program
   confidence?: number; // 0..1 from the ASR engine, when available
   filler?: boolean; // detected filler word
+  rawStart?: number; // ASR start before the audio-envelope snap (ADR-003)
+  rawEnd?: number; // ASR end before the audio-envelope snap (ADR-003)
 }
 
 export interface Paragraph {
