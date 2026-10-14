@@ -74,3 +74,18 @@ reverted individually and its test failed; the files were restored and verified 
   editor card or with `setPauses` / `remove_silences`. The code is right; it was found by an
   independent done-check.
 - **Guard:** `tests/retakes.cjs` "DEFAULT_PAUSES matches ADR-005" asserts the default.
+
+## Update 2026-10-14 (slivers)
+
+Carlos saw many tiny clips between the real cuts in a CapCut export. On `pmv8oeuf8803135`, 14 of
+80 kept clips were under 0.1 s, each holding only silence or deleted words: a pause margin next to
+a word cut, or a deleted word too short (`MIN_CUT`) to be cut on its own.
+
+`deriveCuts` now ends with `closeSlivers`: a kept gap under `MAX_SLIVER` (0.3 s) between two cuts,
+with no kept word overlapping it by more than 10 ms, joins the two cuts. A short gap holding a kept
+word stays ("So", 0.29 s). Same project: 61 clips, none of them slivers. It applies to every
+consumer of `deriveCuts` (render, preview, CapCut, review, srt, MCP), with Tighten pauses on or off.
+
+**Tests:** 4 in `tests/silence.cjs`, written by a fresh agent. Mutants `MAX_SLIVER` 0.3→0.05, the
+speech check removed, and `<` → `<= 0` were each killed; `edl.ts` sha256 verified after restore.
+Suite: 96 pass under Node 24.

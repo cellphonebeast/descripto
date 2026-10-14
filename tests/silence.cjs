@@ -100,3 +100,26 @@ test('pause settings below the 0.3 s analysis minimum are rejected, as in the ed
   assert.equal(validPauseSettings({ enabled: true, minGap: 0.3, margin: 0 }), true);
   assert.equal(validPauseSettings({ enabled: true, minGap: 0.29, margin: 0 }), false);
 });
+
+// ── closeSlivers (MAX_SLIVER) ────────────────────────────────────────────────
+
+test('word-only cuts: a kept gap under 0.3 s with no kept word in it merges into one cut', () => {
+  const words = [word('a', 0, 1), word('x1', 1, 1.2, true), word('b', 1.2, 1.205), word('x2', 1.205, 1.4, true), word('c', 1.4, 2)];
+  assert.deepEqual(deriveCuts({ words }), [{ start: 1, end: 1.4 }]);
+});
+
+test('word-only cuts: a kept word (e.g. a 0.29 s "So") inside a short gap keeps it a kept segment', () => {
+  const words = [word('a', 0, 1), word('x1', 1, 1.1, true), word('So', 1.1, 1.39), word('x2', 1.39, 1.5, true), word('b', 1.5, 2)];
+  assert.deepEqual(deriveCuts({ words }), [{ start: 1, end: 1.1 }, { start: 1.39, end: 1.5 }]);
+});
+
+test('word-only cuts: a kept gap of 0.3 s or more is left alone even with no kept words in it', () => {
+  const words = [word('a', 0, 1), word('x1', 1, 1.2, true), word('x2', 2.0, 2.2, true), word('c', 2.2, 3)];
+  assert.deepEqual(deriveCuts({ words }), [{ start: 1, end: 1.29 }, { start: 1.91, end: 2.2 }]);
+});
+
+test('pauses on: a pause cut sitting 0.06 s from a word cut, with no kept word between, merges into one', () => {
+  const words = [word('a', 0, 1), word('x1', 1, 1.2, true), word('c', 1.85, 3)];
+  const pauses = [{ start: 1.10, end: 2.10 }];
+  assert.deepEqual(deriveCuts({ words, pauses, tightenPauses: on }), [{ start: 1, end: 1.85 }]);
+});

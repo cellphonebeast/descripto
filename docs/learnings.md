@@ -43,3 +43,9 @@ Bug-fix and surprise forensics. Format: Date / Symptom / Root Cause / Fix Applie
 - **Prevention:** before tuning detection, measure what the export KEEPS (kept no-speech gaps),
   not just what the rule finds; a fix that cuts speech-level audio needs timestamps from the
   listener first.
+
+## 2026-10-14 — tiny clips between cuts (CapCut export)
+- **Symptom:** Carlos saw many tiny clips between the real cuts in the CapCut project.
+- **Root cause:** `deriveCuts` merged only touching/overlapping cuts. A pause cut's 0.25 s margin next to a word cut, or a deleted word too short to cut on its own (Groq zero-gap words), left kept slivers. Measured on `pmv8oeuf8803135`: 80 clips, 14 under 0.1 s, every one holding only silence or deleted words.
+- **Fix:** `closeSlivers` in `src/lib/edl.ts`: a kept gap under 0.3 s with no kept word in it joins the two cuts. Same project: 61 clips, none under 0.25 s apart from the 0.25 s lead-in at 0:00; short clips that hold a kept word ("So", 0.29 s) stay.
+- **Prevention:** measure kept-clip lengths (`computeKeeps`) after any change to cut rules, not just the cut count.

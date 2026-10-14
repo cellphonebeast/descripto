@@ -71,11 +71,27 @@ function mergeRanges(ranges: Range[]): Range[] {
   return merged;
 }
 
+// A kept gap this short between two cuts, with no kept word in it, is a sliver
+// (a pause margin next to a word cut, or a deleted word too short to cut on its
+// own). Measured 2026-10-14: 14 of 80 clips under 0.1 s on a real project.
+export const MAX_SLIVER = 0.3;
+
+function closeSlivers(cuts: Range[], words: Word[]): Range[] {
+  const out: Range[] = [];
+  for (const c of cuts) {
+    const last = out[out.length - 1];
+    const gapHasSpeech = () => words.some((w) => !w.deleted && Math.min(w.end, c.start) - Math.max(w.start, last.end) > 0.01);
+    if (last && c.start - last.end < MAX_SLIVER && !gapHasSpeech()) last.end = Math.max(last.end, c.end);
+    else out.push({ ...c });
+  }
+  return out;
+}
+
 // The one cut list every consumer uses: deleted words plus tightened pauses.
 export function deriveCuts(project: { words: Word[]; pauses?: Range[]; tightenPauses?: PauseSettings }): Range[] {
   const words = computeCuts(project.words);
   const pauses = pauseCuts(project.words, project.pauses, project.tightenPauses);
-  return pauses.length ? mergeRanges([...words, ...pauses]) : words;
+  return closeSlivers(pauses.length ? mergeRanges([...words, ...pauses]) : words, project.words);
 }
 
 // Inverse: the segments of the source that survive.
