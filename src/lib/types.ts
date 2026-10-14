@@ -42,7 +42,11 @@ export interface ProjectState {
   lastRender?: RenderInfo;
   lastReview?: ReviewReport;
   lastAudit?: AuditReport;
+  aiRetakes?: AiRetakes; // last "AI check" for repeated takes (ADR-007); word ids, re-validated on read
 }
+
+export interface AiRetakePair { badIds: string[]; goodIds: string[]; confidence: number; reason: string; }
+export interface AiRetakes { at: string; model: string; pairs: AiRetakePair[]; }
 
 export interface PauseSettings {
   enabled: boolean;

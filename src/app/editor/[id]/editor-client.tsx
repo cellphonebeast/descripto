@@ -43,6 +43,8 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
   const [search, setSearch] = useState("");
   const [hideCuts, setHideCuts] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(true);
+  const [aiCheck, setAiCheck] = useState<{ busy: boolean; note: string }>({ busy: false, note: "" });
+  const [capcutBusy, setCapcutBusy] = useState(false);
   const [review, setReview] = useState<ReviewReport | null>(initialProject.lastReview || null);
   const [audit, setAudit] = useState<AuditReport | null>(initialProject.lastAudit || null);
   const [agentCmd, setAgentCmd] = useState("");
@@ -94,8 +96,17 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
   );
   const deletedCount = words.filter((w) => w.deleted).length;
   const fillerCount = words.filter((w) => w.filler && !w.deleted).length;
-  const retakes = useMemo(() => findRetakes(words, project.pauses, cuts), [words, project.pauses, cuts]);
+  const retakes = useMemo(() => findRetakes(words, project.pauses, cuts, project.aiRetakes), [words, project.pauses, cuts, project.aiRetakes]);
   const retakeIds = useMemo(() => ({ bad: new Set(retakes.flatMap((r) => r.bad.wordIds)), good: new Set(retakes.filter((r) => r.kind !== "keyword").flatMap((r) => r.good.wordIds)) }), [retakes]);
+  // Like Auto Cut, the AI check runs on its own the first time a transcribed project opens; the
+  // button re-runs it. Proposals only, and the editor stays usable while it runs.
+  const aiAutoStarted = useRef(false);
+  useEffect(() => {
+    if (aiAutoStarted.current || !project.transcribed || project.aiRetakes) return;
+    aiAutoStarted.current = true;
+    void runAiCheck();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.transcribed, project.aiRetakes]);
 
   // ── mutations ────────────────────────────────────────────────────────────
   const snapshot = useCallback(() => {
@@ -131,6 +142,35 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
     refreshFromLocal();
     persist();
     setSelection(new Set());
+  }
+
+  // AI check for repeated takes (ADR-007): headless Claude Code, proposals only.
+  async function runAiCheck() {
+    setAiCheck({ busy: true, note: "AI check running…" });
+    try {
+      const res = await fetch(`/api/projects/${id}/retakes`, { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `AI check failed (${res.status})`);
+      setProject((p) => (p ? { ...p, aiRetakes: body.aiRetakes } : p));
+      setAiCheck({ busy: false, note: `AI check: ${body.aiRetakes.pairs.length} proposed` });
+    } catch (e) {
+      setAiCheck({ busy: false, note: (e as Error).message });
+    }
+  }
+
+  // Export to CapCut (ADR-008): a new CapCut project with the current cuts, then CapCut opens.
+  async function exportCapcut() {
+    setCapcutBusy(true);
+    try {
+      const res = await fetch(`/api/projects/${id}/capcut`, { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `CapCut export failed (${res.status})`);
+      setExportNotice(`CapCut project "${body.name}" created (${body.clips} clips).${body.launched ? " Opening CapCut…" : " Open CapCut to edit it."}`);
+    } catch (e) {
+      setExportNotice((e as Error).message);
+    } finally {
+      setCapcutBusy(false);
+    }
   }
 
   async function fillers(deleteThem: boolean) {
@@ -541,6 +581,7 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
           <span className="topbar-divider" />
           {project.transcribed && <a href={`/api/projects/${id}/srt`} onClick={e => { if (actionDisabled) e.preventDefault(); }} aria-disabled={actionDisabled} className="btn-ghost captions-link" title="Download SRT captions"><Icon name="text" size={16} /> Captions</a>}
           {renderProg && <button className="btn-danger" onClick={() => void stopExport()} disabled={cancellingRender}>{cancellingRender ? "Stopping…" : "Cancel export"}</button>}
+          <button onClick={() => void exportCapcut()} disabled={!project.transcribed || actionDisabled || capcutBusy || progDur === 0 || !project.sourceWidth} className="btn-soft" title="Create a CapCut project with these cuts and open CapCut">{capcutBusy ? "Sending to CapCut…" : "Edit in CapCut"}</button>
           <button onClick={render} disabled={!project.transcribed || actionDisabled || progDur === 0 || !project.sourceWidth} className="btn-accent export-button"><Icon name="download" size={16} />{renderProg ? `Exporting ${renderProg.pct}%` : "Export video"}</button>
         </div>
       </header>
@@ -735,16 +776,18 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
               <div className="flex items-center justify-between">
                 <p className="text-[13px] font-medium">Repeated takes</p>
                 <div className="flex items-center gap-2">
+                  <button type="button" onClick={runAiCheck} disabled={actionDisabled || aiCheck.busy} className="btn-soft px-2 py-0.5 text-[11px]" title="Ask Claude to find repeats the local check missed">{aiCheck.busy ? "Checking…" : "AI check"}</button>
                   {retakes.length > 1 && <button type="button" onClick={() => setDeleted(retakes.flatMap((r) => r.bad.wordIds), true)} disabled={actionDisabled} className="btn-soft px-2 py-0.5 text-[11px]">Cut all</button>}
                   <span className="filler-count">{retakes.length}</span>
                 </div>
               </div>
               <p className="mt-0.5 text-[11px] leading-snug text-[var(--text-dim)]">Earlier attempts in red, the take that stays in green. Nothing is cut until you choose.</p>
+              {aiCheck.note && <p className="mt-1 text-[11px] text-[var(--text-dim)]" role="status">{aiCheck.note}</p>}
               {retakes.length > 0 && <ul className="retake-list mt-2 space-y-1.5">
                 {retakes.map((r) => (
                   <li key={r.bad.wordIds[0]} className="flex items-start gap-2 text-[11px]">
-                    <button type="button" className="retake-text min-w-0 flex-1 text-left" title={`Keeps: ${r.good.text}`} onClick={() => seekSource(r.bad.start)}>
-                      <span className="tabular-nums text-[var(--text-dim)]">{fmtTime(sourceToProgram(cuts, r.bad.start))}</span> <span className="retake-bad-text">{r.bad.text.length > 70 ? r.bad.text.slice(0, 70) + "…" : r.bad.text}</span>
+                    <button type="button" className="retake-text min-w-0 flex-1 text-left" title={`${r.reason ? `AI: ${r.reason}\n` : ""}Keeps: ${r.good.text}`} onClick={() => seekSource(r.bad.start)}>
+                      <span className="tabular-nums text-[var(--text-dim)]">{fmtTime(sourceToProgram(cuts, r.bad.start))}</span> {r.kind === "ai" && <span className="retake-ai-tag">AI</span>} <span className="retake-bad-text">{r.bad.text.length > 70 ? r.bad.text.slice(0, 70) + "…" : r.bad.text}</span>
                     </button>
                     <button type="button" onClick={() => setDeleted(r.bad.wordIds, true)} disabled={actionDisabled} className="btn-soft shrink-0 px-2 py-0.5 text-[11px]">Cut</button>
                   </li>

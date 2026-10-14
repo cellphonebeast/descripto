@@ -3,8 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const ts = require('typescript');
 require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, filename);
-const { similarity, segmentWords, findRetakes, WINDOWED_THRESHOLD } = require('../src/lib/retakes.ts');
+const { similarity, segmentWords, findRetakes, findStutters, WINDOWED_THRESHOLD } = require('../src/lib/retakes.ts');
 const { DEFAULT_PAUSES } = require('../src/lib/edl.ts');
+const { parseAiRetakes, aiRetakePrompt } = require('../src/lib/retakes-ai.ts');
 
 // One word per 0.3 s; each sentence is its own phrase.
 const script = (...sentences) => {
@@ -144,4 +145,186 @@ test('a restart-phrase pair is kind "keyword" with similarity 1 even sharing no 
 
 test('DEFAULT_PAUSES matches ADR-005: disabled by default, minGap 1, margin 0.25', () => {
   assert.deepEqual(DEFAULT_PAUSES, { enabled: false, minGap: 1.0, margin: 0.25 });
+});
+
+// ── Figure guard: a keeper may ADD figures ──────────────────────────────────
+
+test('figure guard: a keeper may add a figure the bad take never had', () => {
+  const r = findRetakes(script('So because that line shifted away from them.', 'So because that line shifted away from them it moved 60 points.'));
+  assert.equal(r.length, 1);
+  assert.equal(r[0].bad.text, 'So because that line shifted away from them.');
+  assert.equal(r[0].good.text, 'So because that line shifted away from them it moved 60 points.');
+});
+
+// ── findStutters / the stutter pass inside findRetakes ──────────────────────
+
+test('a run of 3+ words said twice back to back in one phrase is a single "stutter" retake', () => {
+  const r = findRetakes(script('on top of that every quarterback on top of that every quarterback faced Denver.'));
+  const stutters = r.filter((x) => x.kind === 'stutter');
+  assert.equal(stutters.length, 1);
+  assert.equal(stutters[0].bad.text, 'on top of that every quarterback');
+  assert.equal(stutters[0].good.text, 'on top of that every quarterback');
+  assert.deepEqual(stutters[0].bad.wordIds, ['w0', 'w1', 'w2', 'w3', 'w4', 'w5']);
+  assert.deepEqual(stutters[0].good.wordIds, ['w6', 'w7', 'w8', 'w9', 'w10', 'w11']);
+});
+
+test('a 2-word repeat is not flagged as a stutter', () => {
+  const r = findRetakes(script('it is it is fine today.'));
+  assert.equal(r.filter((x) => x.kind === 'stutter').length, 0);
+});
+
+test('number shorthand ("two two two two two two") is not flagged as a stutter', () => {
+  const r = findRetakes(script('the total was two two two two two two points.'));
+  assert.equal(r.filter((x) => x.kind === 'stutter').length, 0);
+});
+
+test('a repeat spanning two phrases is not reported as kind "stutter"', () => {
+  // "every quarterback that has faced" ends phrase 1 and opens phrase 2: an immediately
+  // back-to-back repeat, but split across a sentence end, so the per-phrase stutter pass
+  // (which searches inside one segment only) can never see it. Both phrases are deliberately
+  // too dissimilar overall to trip the phrase-level adjacent/windowed/prefix passes either.
+  const r = findRetakes(script('so here is the plan every quarterback that has faced.', 'every quarterback that has faced Denver this season really struggled.'));
+  assert.equal(r.filter((x) => x.kind === 'stutter').length, 0);
+});
+
+test('a repeated phrase whose sign differs is not flagged as a stutter', () => {
+  const r = findRetakes(script('the value is -5 points the value is 5 points.'));
+  assert.equal(r.filter((x) => x.kind === 'stutter').length, 0);
+});
+
+// ── AI merge in findRetakes(words, pauses, cuts, ai) ────────────────────────
+
+test('an AI pair is included as kind "ai" with its reason while every word is still kept', () => {
+  const words = script('Alpha bravo charlie delta echo.');
+  const ai = { pairs: [{ badIds: [words[0].id, words[1].id], goodIds: [words[2].id, words[3].id], confidence: 0.9, reason: 'restart' }] };
+  const r = findRetakes(words, [], [], ai);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].kind, 'ai');
+  assert.equal(r[0].reason, 'restart');
+  assert.equal(r[0].similarity, 0.9);
+});
+
+test('an AI pair is dropped once one of its words is deleted', () => {
+  const words = script('Alpha bravo charlie delta echo.');
+  const ai = { pairs: [{ badIds: [words[0].id, words[1].id], goodIds: [words[2].id, words[3].id], confidence: 0.9, reason: 'restart' }] };
+  words[0].deleted = true;
+  assert.deepEqual(findRetakes(words, [], [], ai).filter((x) => x.kind === 'ai'), []);
+});
+
+test('an AI pair is dropped once one of its words falls inside a cut range', () => {
+  const words = script('Alpha bravo charlie delta echo.');
+  const ai = { pairs: [{ badIds: [words[0].id, words[1].id], goodIds: [words[2].id, words[3].id], confidence: 0.9, reason: 'restart' }] };
+  const r = findRetakes(words, [], [{ start: words[0].start, end: words[0].end }], ai);
+  assert.deepEqual(r.filter((x) => x.kind === 'ai'), []);
+});
+
+test('an AI pair overlapping a take the local passes already flagged is not added (no duplicate)', () => {
+  const words = script('So here is the whole game today.', 'So here is the whole game.');
+  const ai = { pairs: [{ badIds: [words[0].id], goodIds: [words[8].id], confidence: 0.9, reason: 'dup' }] };
+  const r = findRetakes(words, [], [], ai);
+  assert.equal(r.filter((x) => x.kind === 'ai').length, 0);
+  assert.equal(r.filter((x) => x.kind === 'adjacent').length, 1);
+});
+
+test('AI results merge in sorted order by bad.start', () => {
+  const words = script('Alpha bravo charlie.', 'Delta echo foxtrot.', 'Golf hotel india.', 'Juliet kilo lima.');
+  const segs = segmentWords(words);
+  const ai = {
+    pairs: [
+      { badIds: segs[2].wordIds, goodIds: segs[3].wordIds, confidence: 0.9, reason: 'later' },
+      { badIds: segs[0].wordIds, goodIds: segs[1].wordIds, confidence: 0.9, reason: 'earlier' },
+    ],
+  };
+  const r = findRetakes(words, [], [], ai);
+  assert.deepEqual(r.map((x) => x.reason), ['earlier', 'later']);
+});
+
+// ── parseAiRetakes(text, segments) ──────────────────────────────────────────
+
+const aiSegs = () => segmentWords(script('Zero segment text.', 'One segment text.', 'Two segment text.', 'Three segment text.', 'Four segment text.'));
+
+test('parseAiRetakes accepts a plain JSON array', () => {
+  const segs = aiSegs();
+  const out = parseAiRetakes(JSON.stringify([{ bad_index: 1, good_index: 2, confidence: 0.8, reason: 'r' }]), segs);
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0].badIds, segs[1].wordIds);
+  assert.deepEqual(out[0].goodIds, segs[2].wordIds);
+  assert.equal(out[0].confidence, 0.8);
+  assert.equal(out[0].reason, 'r');
+});
+
+test('parseAiRetakes accepts a JSON array wrapped in ```json fences', () => {
+  const segs = aiSegs();
+  const text = '```json\n' + JSON.stringify([{ bad_index: 1, good_index: 2, confidence: 0.8, reason: 'r' }]) + '\n```';
+  assert.equal(parseAiRetakes(text, segs).length, 1);
+});
+
+test('parseAiRetakes drops bad_index 0 (the hook)', () => {
+  const segs = aiSegs();
+  const out = parseAiRetakes(JSON.stringify([{ bad_index: 0, good_index: 2, confidence: 0.9, reason: 'r' }]), segs);
+  assert.deepEqual(out, []);
+});
+
+test('parseAiRetakes drops a pair where bad >= good, including bad === good', () => {
+  const segs = aiSegs();
+  const out = parseAiRetakes(JSON.stringify([
+    { bad_index: 2, good_index: 1, confidence: 0.9, reason: 'r' },
+    { bad_index: 2, good_index: 2, confidence: 0.9, reason: 'r' },
+  ]), segs);
+  assert.deepEqual(out, []);
+});
+
+test('parseAiRetakes drops out-of-range indices', () => {
+  const segs = aiSegs();
+  const out = parseAiRetakes(JSON.stringify([
+    { bad_index: -1, good_index: 2, confidence: 0.9, reason: 'r' },
+    { bad_index: 1, good_index: 99, confidence: 0.9, reason: 'r' },
+  ]), segs);
+  assert.deepEqual(out, []);
+});
+
+test('parseAiRetakes drops confidence < 0.75', () => {
+  const segs = aiSegs();
+  const out = parseAiRetakes(JSON.stringify([{ bad_index: 1, good_index: 2, confidence: 0.74, reason: 'r' }]), segs);
+  assert.deepEqual(out, []);
+});
+
+test('parseAiRetakes drops a second pair with the same bad index', () => {
+  const segs = aiSegs();
+  const out = parseAiRetakes(JSON.stringify([
+    { bad_index: 1, good_index: 2, confidence: 0.9, reason: 'first' },
+    { bad_index: 1, good_index: 3, confidence: 0.9, reason: 'second' },
+  ]), segs);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].reason, 'first');
+});
+
+test('parseAiRetakes drops a pair whose bad is an earlier pair\'s good', () => {
+  const segs = aiSegs();
+  const out = parseAiRetakes(JSON.stringify([
+    { bad_index: 1, good_index: 2, confidence: 0.9, reason: 'first' },
+    { bad_index: 2, good_index: 3, confidence: 0.9, reason: 'chained' },
+  ]), segs);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].reason, 'first');
+});
+
+test('parseAiRetakes throws an Error containing "non-JSON" on non-JSON text', () => {
+  assert.throws(() => parseAiRetakes('not json at all', aiSegs()), /non-JSON/);
+});
+
+test('parseAiRetakes returns [] for a non-array JSON value', () => {
+  assert.deepEqual(parseAiRetakes(JSON.stringify({ bad_index: 1, good_index: 2 }), aiSegs()), []);
+});
+
+// ── aiRetakePrompt(segments) ─────────────────────────────────────────────────
+
+test('aiRetakePrompt names the hook and formats one "i | m:ss | text" line per segment', () => {
+  const segs = aiSegs();
+  const prompt = aiRetakePrompt(segs);
+  assert.ok(prompt.includes('The HOOK is segment 0'));
+  segs.forEach((s, i) => {
+    const mm = Math.floor(s.start / 60), ss = String(Math.floor(s.start % 60)).padStart(2, '0');
+    assert.ok(prompt.includes(`${i} | ${mm}:${ss} | ${s.text}`), `missing formatted line for segment ${i}`);
+  });
 });

@@ -1,4 +1,4 @@
-import type { Word } from "./types";
+import type { AiRetakes, Word } from "./types";
 
 // ── Repeated takes (Phase 3) ────────────────────────────────────────────────
 // Port of capcut's multi-pass detector (my-project/capcut/core/duplicate_detector.py,
@@ -17,9 +17,9 @@ export const SEGMENT_PAUSE_SEC = 0.8; // capcut transcriber.py:208 splits segmen
 export const SEGMENT_MAX_WORDS = 25; // capcut config.py:358
 export const RESTART_PHRASES = ["starting over", "start over", "that didn't work", "that did not work", "this is a retake", "let me redo that", "let me try that again", "scratch that"];
 
-export type RetakeKind = "keyword" | "adjacent" | "windowed" | "prefix" | "short" | "straggler";
+export type RetakeKind = "keyword" | "adjacent" | "windowed" | "prefix" | "short" | "straggler" | "stutter" | "ai";
 export interface Segment { wordIds: string[]; text: string; start: number; end: number; }
-export interface Retake { bad: Segment; good: Segment; kind: RetakeKind; similarity: number; }
+export interface Retake { bad: Segment; good: Segment; kind: RetakeKind; similarity: number; reason?: string; }
 
 const tokens = (text: string) => text.toLowerCase().replace(/[’‘]/g, "'").split(/\s+/).map((t) => t.replace(/^[^\p{L}\p{N}']+|[^\p{L}\p{N}']+$/gu, "")).filter(Boolean);
 
@@ -83,7 +83,10 @@ const negated = (t: string[]) => t.some((w) => NEGATIONS.has(w) || w.endsWith("n
 
 // Different figures ("54.5 on the under" / "the under 47.5", "-5" / "5") are different claims,
 // not a retake. Read from the original text: token cleanup strips signs and leading points.
-const figures = (text: string) => (text.match(/[-+]?(?:\d[\d,]*)?\.?\d+/g) ?? []).map((f) => f.replace(/,/g, "")).sort().join(" ");
+// A keeper may ADD figures (a restart that goes on to say "it moved 60 points"); every figure in
+// the earlier take must reappear in the keeper.
+const figures = (text: string) => (text.match(/[-+]?(?:\d[\d,]*)?\.?\d+/g) ?? []).map((f) => f.replace(/,/g, ""));
+const figuresKept = (bad: string[], good: string[]) => { const left = [...good]; return bad.every((f) => { const i = left.indexOf(f); if (i < 0) return false; left.splice(i, 1); return true; }); };
 
 interface Pair { bad: number; good: number; kind: RetakeKind; similarity: number; }
 
@@ -92,7 +95,7 @@ export function detectRetakes(segments: Segment[]): Pair[] {
   if (n < 2) return [];
   const tok = segments.map((s) => tokens(s.text));
   const fig = segments.map((s) => figures(s.text));
-  const compatible = (bad: number, good: number) => negated(tok[bad]) === negated(tok[good]) && fig[bad] === fig[good];
+  const compatible = (bad: number, good: number) => negated(tok[bad]) === negated(tok[good]) && figuresKept(fig[bad], fig[good]);
   const best = new Map<number, Pair>();
   const offer = (p: Pair): boolean => {
     if (p.kind !== "keyword" && !compatible(p.bad, p.good)) return false;
@@ -167,7 +170,51 @@ function consolidate(best: Map<number, Pair>) {
   }
 }
 
-export function findRetakes(words: Word[], pauses?: { start: number; end: number }[], cuts?: { start: number; end: number }[]): Retake[] {
+// A run of STUTTER_MIN_WORDS+ words said twice back to back ("on top of that every quarterback that
+// has faced on top of that every quarterback that has faced Denver") is a restart inside one phrase,
+// which the phrase passes cannot see. Searched inside each phrase only; repeats across phrases are
+// the phrase passes' job. Spoken number shorthand ("two two two") is never a stutter.
+export const STUTTER_MIN_WORDS = 3;
+export const STUTTER_MAX_WORDS = 12;
+const NUMBER_WORD = /^(\d[\d.,]*|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|and|a|half)$/;
+const asSegment = (ws: Word[]): Segment => ({ wordIds: ws.map((w) => w.id), text: ws.map((w) => w.text).join(" "), start: ws[0].start, end: ws[ws.length - 1].end });
+
+export function findStutters(kept: Word[]): Retake[] {
+  const tok = kept.map((w) => tokens(w.text).join(" "));
+  const out: Retake[] = [];
+  for (let i = 0; i < kept.length; ) {
+    let hit = 0;
+    for (let n = Math.min(STUTTER_MAX_WORDS, Math.floor((kept.length - i) / 2)); n >= STUTTER_MIN_WORDS; n--) {
+      const a = tok.slice(i, i + n);
+      if (a.some((t) => !t) || a.every((t) => NUMBER_WORD.test(t))) continue;
+      if (a.every((t, k) => t === tok[i + n + k]) && figuresKept(figures(kept.slice(i, i + n).map((w) => w.text).join(" ")), figures(kept.slice(i + n, i + 2 * n).map((w) => w.text).join(" ")))) { hit = n; break; }
+    }
+    if (!hit) { i++; continue; }
+    out.push({ bad: asSegment(kept.slice(i, i + hit)), good: asSegment(kept.slice(i + hit, i + 2 * hit)), kind: "stutter", similarity: 1 });
+    i += hit;
+  }
+  return out;
+}
+
+const keptWords = (words: Word[], cuts: { start: number; end: number }[]) => words.filter((w) => { const mid = (w.start + w.end) / 2; return !w.deleted && !cuts.some((c) => mid >= c.start && mid < c.end); });
+
+export function findRetakes(words: Word[], pauses?: { start: number; end: number }[], cuts: { start: number; end: number }[] = [], ai?: AiRetakes): Retake[] {
   const segs = segmentWords(words, pauses, cuts);
-  return detectRetakes(segs).map((p) => ({ bad: segs[p.bad], good: segs[p.good], kind: p.kind, similarity: +p.similarity.toFixed(3) }));
+  const out: Retake[] = detectRetakes(segs).map((p) => ({ bad: segs[p.bad], good: segs[p.good], kind: p.kind, similarity: +p.similarity.toFixed(3) }));
+  const kept = keptWords(words, cuts);
+  const byId = new Map(kept.map((w) => [w.id, w]));
+  const claimed = () => new Set(out.flatMap((r) => [...r.bad.wordIds, ...r.good.wordIds]));
+  let taken = claimed();
+  for (const s of segs.flatMap((g) => findStutters(g.wordIds.map((id) => byId.get(id)!)))) if (!s.bad.wordIds.some((id) => taken.has(id))) out.push(s);
+  // AI pairs (ADR-007) were found on an earlier state of the edit: show one only while every word
+  // of both takes is still kept, and never over a take the local passes already placed.
+  if (ai) {
+    taken = claimed();
+    for (const p of ai.pairs) {
+      const bad = p.badIds.map((id) => byId.get(id)), good = p.goodIds.map((id) => byId.get(id));
+      if (!bad.length || !good.length || bad.some((w) => !w) || good.some((w) => !w) || p.badIds.some((id) => taken.has(id))) continue;
+      out.push({ bad: asSegment(bad as Word[]), good: asSegment(good as Word[]), kind: "ai", similarity: p.confidence, reason: p.reason });
+    }
+  }
+  return out.sort((a, b) => a.bad.start - b.bad.start);
 }

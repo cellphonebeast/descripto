@@ -213,3 +213,4 @@ input:disabled { opacity: .6; cursor: wait; }
 .panel-toggle .panel-heading-meta svg { transition: transform 0.15s; }
 .preview-panel[hidden] { display: none; }
 .export-download-top { margin: 0; padding: 10px 20px; border-top: 0; border-bottom: 1px solid var(--border-soft); }
+.retake-ai-tag { font-size: 9px; padding: 0 4px; border-radius: 3px; background: #ffffff12; color: var(--text-dim); }
