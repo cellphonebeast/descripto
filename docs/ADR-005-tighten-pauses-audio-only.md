@@ -66,3 +66,11 @@ reverted individually and its test failed; the files were restored and verified 
   - low: PUT accepted `minGap` below 0.3.
   - All fixed with tests; version bumped to 3.
 - **Astra round 2, CLEAN.**
+
+## Update 2026-10-14
+
+- **Correction:** the Decision line "Default: on, 1.0 s, 0.25 s" is wrong. `DEFAULT_PAUSES`
+  (`src/lib/edl.ts`) is **off**, 1.0 s, 0.25 s. Tighten pauses is turned on per project in the
+  editor card or with `setPauses` / `remove_silences`. The code is right; it was found by an
+  independent done-check.
+- **Guard:** `tests/retakes.cjs` "DEFAULT_PAUSES matches ADR-005" asserts the default.

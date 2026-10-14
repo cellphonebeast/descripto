@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const ts = require('typescript');
 require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, filename);
-const { similarity, segmentWords, findRetakes } = require('../src/lib/retakes.ts');
+const { similarity, segmentWords, findRetakes, WINDOWED_THRESHOLD } = require('../src/lib/retakes.ts');
+const { DEFAULT_PAUSES } = require('../src/lib/edl.ts');
 
 // One word per 0.3 s; each sentence is its own phrase.
 const script = (...sentences) => {
@@ -86,4 +87,61 @@ test('signs and leading points are part of a figure; a trailing full stop is not
   assert.deepEqual(findRetakes(script('We said the value is -5.', 'We said the value is 5.')), []);
   assert.deepEqual(findRetakes(script('We said the value is .5 again.', 'We said the value is 5 again.')), []);
   assert.equal(findRetakes(script('We said the value is 5.', 'We said the value is 5 again.')).length, 1);
+});
+
+// A crude tokenizer, just to assert (independently of the implementation's own `tokens()`)
+// that the filler phrases below genuinely don't resemble each other or the real phrase.
+const wtok = (s) => s.toLowerCase().split(' ');
+
+test('a windowed match 3 phrases later is flagged; the same match 4 phrases later is not', () => {
+  const real = 'Darnold goes over four and a half yards tonight for the team.';
+  const retake = 'Darnold goes over four and a half yards tonight for the squad.';
+  const fillerA = 'Alpha bravo charlie delta echo foxtrot golf hotel.';
+  const fillerB = 'Kilo lima mike november oscar papa quebec romeo.';
+  const fillerC = 'Uniform victor whiskey xray yankee zulu apple banana.';
+
+  // Guard: fillers must be dissimilar to each other and to the real phrase, and the
+  // real/retake pair must actually clear WINDOWED_THRESHOLD, or this test proves nothing.
+  for (const f of [fillerA, fillerB, fillerC]) {
+    assert.ok(similarity(wtok(real), wtok(f)) < WINDOWED_THRESHOLD, `filler too similar to real: ${f}`);
+  }
+  assert.ok(similarity(wtok(fillerA), wtok(fillerB)) < WINDOWED_THRESHOLD, 'fillers too similar to each other');
+  assert.ok(similarity(wtok(fillerB), wtok(fillerC)) < WINDOWED_THRESHOLD, 'fillers too similar to each other');
+  assert.ok(similarity(wtok(fillerA), wtok(fillerC)) < WINDOWED_THRESHOLD, 'fillers too similar to each other');
+  assert.ok(similarity(wtok(real), wtok(retake)) >= WINDOWED_THRESHOLD, 'real/retake pair must clear the windowed threshold');
+  // Neither phrase contains a negation word or a figure, so the compatibility guards
+  // (negation parity, figure parity) can never be the reason a pairing is rejected here.
+
+  // Distance 3 (i=0, j=3): inside the WINDOW=3 lookahead -> flagged as "windowed".
+  const r3 = findRetakes(script(real, fillerA, fillerB, retake));
+  assert.deepEqual(summary(r3), [`windowed: ${real} -> ${retake}`]);
+
+  // Distance 4 (i=0, j=4): one phrase further than the windowed pass looks -> not flagged.
+  const r4 = findRetakes(script(real, fillerA, fillerB, fillerC, retake));
+  assert.deepEqual(r4, []);
+});
+
+test('segmentWords splits a long punctuation-free, pause-free run every SEGMENT_MAX_WORDS words', () => {
+  const thirty = Array.from({ length: 30 }, (_, i) => `word${i}`).join(' ');
+  const words = script(thirty);
+  const segs = segmentWords(words);
+  assert.deepEqual(segs.map((s) => s.wordIds.length), [25, 5]);
+  assert.equal(segs[0].wordIds[0], 'w0');
+  assert.equal(segs[0].wordIds[24], 'w24');
+  assert.equal(segs[1].wordIds[0], 'w25');
+  assert.equal(segs[1].wordIds[4], 'w29');
+});
+
+test('a restart-phrase pair is kind "keyword" with similarity 1 even sharing no words', () => {
+  const r = findRetakes(script('Scratch that.', 'Banana kayak umbrella forest.'));
+  assert.equal(r.length, 1);
+  assert.equal(r[0].kind, 'keyword');
+  assert.equal(r[0].similarity, 1);
+  const badWords = new Set(r[0].bad.text.toLowerCase().replace(/[.]/g, '').split(' '));
+  const goodWords = new Set(r[0].good.text.toLowerCase().replace(/[.]/g, '').split(' '));
+  assert.equal([...badWords].filter((w) => goodWords.has(w)).length, 0, 'bad/good should share no words');
+});
+
+test('DEFAULT_PAUSES matches ADR-005: disabled by default, minGap 1, margin 0.25', () => {
+  assert.deepEqual(DEFAULT_PAUSES, { enabled: false, minGap: 1.0, margin: 0.25 });
 });

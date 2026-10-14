@@ -108,3 +108,22 @@ Live checks:
   - token cleanup erased signs and decimals.
   All fixed with tests.
 - **Astra round 2, CLEAN.**
+
+## Update 2026-10-14
+
+An independent done-check listed untested contracts. A separate agent added 4 tests to
+`tests/retakes.cjs`:
+- a windowed match 3 phrases later is flagged, and 4 phrases later is not;
+- a run with no punctuation is split every 25 words;
+- a restart-phrase pair is `keyword` with similarity 1, even when the phrases share no words;
+- `DEFAULT_PAUSES` is off.
+
+For the first two, mutants (`WINDOW = 4`, `SEGMENT_MAX_WORDS = 26`) were confirmed to fail, and
+the source was restored and verified by sha256. Suite: 70 pass.
+
+**Evaluated and declined** (no cheap test in the existing convention):
+- the editor card, tints and Cut/Undo (covered by Playwright checks this session, not
+  automated);
+- the MCP `find_retakes` tool and its Node type-stripping error path;
+- the API routes, plus `store.ts` / `transcribe.ts` persistence and backfill;
+- boundary tests for each threshold.
