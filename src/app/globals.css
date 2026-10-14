@@ -66,6 +66,12 @@ video { background: #101412; }
 .filter-tabs button[aria-pressed="true"] { background: #2a332d; border-color: #ffffff0c; color: #e3eae5; box-shadow: 0 1px 3px #0003; }
 .library-filters select { appearance: none; min-height: 30px; background: transparent; color: #a3aea6; font-size: 11px; padding: 5px 28px 5px 10px; border: 1px solid transparent; border-radius: 5px; }
 .project-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+.project-card-wrap { position: relative; min-width: 0; }
+.project-card-wrap > .project-card { display: block; }
+.project-delete { position: absolute; top: 8px; left: 8px; z-index: 2; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; border: 1px solid #ffffff1f; background: #0d120fcc; color: #d8e2dc; opacity: 0; transition: opacity .15s ease, background-color .15s ease; }
+.project-card-wrap:hover .project-delete, .project-delete:focus-visible { opacity: 1; }
+.project-delete:hover { background: #7a2a2a; color: #fff; }
+@media (hover: none) { .project-delete { opacity: 1; } }
 .project-card { min-width: 0; border-radius: 8px; overflow: hidden; background: #191f1b; border: 1px solid #ffffff0d; transition: background-color .18s ease, border-color .18s ease, box-shadow .18s ease; }
 .project-card:hover { background: #1e2721; border-color: #a4c0af48; box-shadow: 0 6px 20px #050a071f; }
 .project-thumbnail { position: relative; aspect-ratio: 16/9; background: repeating-linear-gradient(90deg, transparent, transparent 22px, #9bcca208 23px), #222d24; display: grid; place-items: center; color: #829887; overflow: hidden; }
