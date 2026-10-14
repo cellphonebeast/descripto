@@ -732,7 +732,10 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
             <div className="card refinement-card">
               <div className="flex items-center justify-between">
                 <p className="text-[13px] font-medium">Repeated takes</p>
-                <span className="filler-count">{retakes.length}</span>
+                <div className="flex items-center gap-2">
+                  {retakes.length > 1 && <button type="button" onClick={() => setDeleted(retakes.flatMap((r) => r.bad.wordIds), true)} disabled={actionDisabled} className="btn-soft px-2 py-0.5 text-[11px]">Cut all</button>}
+                  <span className="filler-count">{retakes.length}</span>
+                </div>
               </div>
               <p className="mt-0.5 text-[11px] leading-snug text-[var(--text-dim)]">Earlier attempts in red, the take that stays in green. Nothing is cut until you choose.</p>
               {retakes.length > 0 && <ul className="retake-list mt-2 space-y-1.5">

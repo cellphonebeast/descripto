@@ -127,3 +127,10 @@ the source was restored and verified by sha256. Suite: 70 pass.
 - the MCP `find_retakes` tool and its Node type-stripping error path;
 - the API routes, plus `store.ts` / `transcribe.ts` persistence and backfill;
 - boundary tests for each threshold.
+
+## Update 2026-10-14 (Cut all)
+
+Carlos asked for a **Cut all** button. It sits in the card header and shows when there are 2 or
+more retakes. It deletes every earlier take's words in one `setDeleted` call: one snapshot, so a
+single Undo restores them all. Keepers are never in a `bad` set after consolidation, so no kept
+take is cut. Live check on the test project: 6 retakes / 44 red words → 0 / 0, Undo → 6 / 44.
