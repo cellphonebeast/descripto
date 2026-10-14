@@ -89,7 +89,7 @@ export function programToSource(cuts: Range[], t: number): number {
 // ── Filler detection ────────────────────────────────────────────────────────
 const FILLERS = new Set([
   "um", "uh", "erm", "hmm",
-  "like",
+  // "like" is deliberately absent: it cut too many real phrases ("I'd like to", "stuff like that").
   "basically", "actually", "literally", "honestly", "seriously", "obviously",
   "sorta", "kinda",
 ]);
