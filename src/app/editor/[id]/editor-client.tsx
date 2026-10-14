@@ -669,6 +669,8 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
         {/* ── right: player + actions ── */}
         <aside className="inspector">
           <button type="button" className="panel-heading panel-toggle" aria-expanded={previewOpen} onClick={() => setPreviewOpen(o => !o)}><span><Icon name="film" size={16} /> Preview</span><span className="panel-heading-meta">{project.sourceWidth && project.sourceHeight ? `${project.sourceWidth} × ${project.sourceHeight}` : "Media"}<Icon name="chevron" size={14} style={{ transform: previewOpen ? "none" : "rotate(-90deg)" }} /></span></button>
+          {/* export download sits outside the collapsible preview so it stays reachable */}
+          {hasRender && <div className="export-download export-download-top"><span>{exportCurrent ? "Export matches current cuts" : "Last export · earlier edit"}</span><a className="btn-soft" href={`/api/projects/${id}/media?render=1&download=1`}><Icon name="download" size={14} /> Download MP4</a></div>}
           {/* player: collapsed with CSS only, so the video stays mounted and word clicks still play */}
           <div className="preview-panel" hidden={!previewOpen}>
             <div className="preview-tabs">
@@ -694,7 +696,6 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
             <p className="mt-2 text-[11px] text-[var(--text-dim)]">
               {playMode === "source" ? "Your cuts are applied live. Ready to export anytime." : exportCurrent ? "Watching your current export." : "Earlier export. Switch to Live preview to see your latest cuts."}
             </p>
-            {hasRender && <div className="export-download"><span>{exportCurrent ? "Export matches current cuts" : "Last export · earlier edit"}</span><a className="btn-soft" href={`/api/projects/${id}/media?render=1&download=1`}><Icon name="download" size={14} /> Download MP4</a></div>}
             {!project.sourceWidth && <p className="muted text-[11px]">Audio recordings support transcription and captions. MP4 export requires a video.</p>}
           </div>
 

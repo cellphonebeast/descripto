@@ -212,3 +212,4 @@ input:disabled { opacity: .6; cursor: wait; }
 .panel-toggle .panel-heading-meta { display: flex; align-items: center; gap: 8px; }
 .panel-toggle .panel-heading-meta svg { transition: transform 0.15s; }
 .preview-panel[hidden] { display: none; }
+.export-download-top { margin: 0; padding: 10px 20px; border-top: 0; border-bottom: 1px solid var(--border-soft); }
