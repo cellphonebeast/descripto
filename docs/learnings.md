@@ -2,6 +2,23 @@
 
 Bug-fix and surprise forensics. Format: Date / Symptom / Root Cause / Fix Applied / Prevention.
 
+## 2026-10-15 — Repeated Takes misses 1-2 word stutters (name/word repeats)
+
+- **Symptom:** Gemini's post-render Review step caught repeated words the Repeated Takes
+  feature (ADR-006/007) missed: "Sam Darnold" repeated (0:51), "these are" repeated (4:18),
+  "they" repeated (10:32), "basically" repeated (9:11).
+- **Root Cause:** ADR-007's stutter pass only flags 3-to-12 word repeated runs, by design, to
+  avoid false positives on normal speech ("I I think"). Project `pmv8osui5315bf1`: the AI retake
+  check found 9 pairs on open, 8/9 were cut pre-export (confirmed via `words[].deleted`); the
+  4 repeats above are all 1-2 words, below the floor, so neither the local nor the AI pass could
+  have caught them.
+- **Fix Applied:** none yet. Filed as `cellphonebeast/maintenance#318` — needs a second, careful
+  pass for sub-3-word runs, test-gated and mutation-tested like the rest of `retakes.ts` before
+  shipping (must run from widescreen).
+- **Prevention:** when tuning a detector's floor/window, measure what a wider catch (here,
+  Gemini's full-video review) finds that the narrower rule structurally cannot, not just whether
+  the existing threshold works on its own test cases.
+
 ## 2026-10-14 — Transcript timestamps carry no pause information
 
 - **Symptom:** padding rules and transcript-gap silence detection did nothing or starved cuts.
