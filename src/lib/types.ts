@@ -37,7 +37,8 @@ export interface ProjectState {
   paragraphs: Paragraph[];
   studioSound: boolean; // apply audio enhancement on render
   pauses?: { start: number; end: number }[]; // quiet stretches of the audio (ADR-004), from audio16k.wav
-  pausesVersion?: number; // detection version that produced `pauses`
+  speech?: { start: number; end: number }[]; // sustained speech-level runs (ADR-010), from audio16k.wav
+  pausesVersion?: number; // detection version that produced `pauses` and `speech`
   tightenPauses?: PauseSettings; // "Tighten pauses" setting; absent = off
   lastRender?: RenderInfo;
   lastReview?: ReviewReport;

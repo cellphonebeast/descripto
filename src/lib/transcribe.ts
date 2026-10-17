@@ -4,7 +4,7 @@ import type { Word } from "./types";
 import { extractAudio } from "./ffmpeg";
 import { runProcess } from "./subprocess";
 import { groqKey } from "./env";
-import { findQuietRegions, PAUSE_ANALYSIS_VERSION, readWav, snapWordBoundaries } from "./audio-envelope";
+import { findQuietRegions, findSpeechRuns, PAUSE_ANALYSIS_VERSION, readWav, snapWordBoundaries } from "./audio-envelope";
 export { PAUSE_ANALYSIS_VERSION };
 const run = (bin: string, args: string[]) => runProcess(bin, args);
 
@@ -16,6 +16,7 @@ export interface TranscribeResult {
   words: Word[];
   engine: string;
   pauses?: { start: number; end: number }[]; // quiet stretches of the audio (ADR-004)
+  speech?: { start: number; end: number }[]; // sustained speech-level runs (ADR-010)
   pausesVersion?: number;
 }
 
@@ -134,17 +135,18 @@ function withAudio(words: Word[], wav: string, engine: string): TranscribeResult
   try {
     const pcm = readWav(wav);
     snapWordBoundaries(words, pcm);
-    return { words, engine, pauses: findQuietRegions(pcm), pausesVersion: PAUSE_ANALYSIS_VERSION };
+    return { words, engine, pauses: findQuietRegions(pcm), speech: findSpeechRuns(pcm), pausesVersion: PAUSE_ANALYSIS_VERSION };
   } catch (e) {
     console.warn(`[transcribe] envelope snap skipped: ${(e as Error).message}`);
     return { words, engine };
   }
 }
 
-// Quiet stretches for a project analyzed by an older detector (or none); null when the WAV is unusable.
-export function pausesFromWav(wav: string): { start: number; end: number }[] | null {
+// Quiet stretches + speech runs for a project analyzed by an older detector (or none); null when the WAV is unusable.
+export function pausesFromWav(wav: string): { pauses: { start: number; end: number }[]; speech: { start: number; end: number }[] } | null {
   try {
-    return findQuietRegions(readWav(wav));
+    const pcm = readWav(wav);
+    return { pauses: findQuietRegions(pcm), speech: findSpeechRuns(pcm) };
   } catch (e) {
     console.warn(`[pauses] could not analyze ${wav}: ${(e as Error).message}`);
     return null;

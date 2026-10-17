@@ -15,8 +15,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   if (!p) return NextResponse.json({ error: "not found" }, { status: 404 });
   // Projects transcribed before ADR-004, or analyzed by an older detector: analyze the WAV once.
   if (p.transcribed && p.pausesVersion !== PAUSE_ANALYSIS_VERSION) {
-    const pauses = pausesFromWav(`${projectDir(p.id)}/audio16k.wav`);
-    if (pauses) { p.pauses = pauses; p.pausesVersion = PAUSE_ANALYSIS_VERSION; saveProject(p); }
+    const analyzed = pausesFromWav(`${projectDir(p.id)}/audio16k.wav`);
+    if (analyzed) { p.pauses = analyzed.pauses; p.speech = analyzed.speech; p.pausesVersion = PAUSE_ANALYSIS_VERSION; saveProject(p); }
   }
   const cuts = deriveCuts(p);
   return NextResponse.json({

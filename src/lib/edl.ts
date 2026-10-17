@@ -60,6 +60,47 @@ export function pauseCuts(words: Word[], pauses: Range[] | undefined, settings: 
   return out;
 }
 
+// ── Gap cuts (ADR-010) ───────────────────────────────────────────────────────
+// Auto Cut's polarity (capcut ADR-033): a transcript gap between kept words is
+// cut whole unless its interior holds a sustained speech-level run (`speech`,
+// from findSpeechRuns) that no deleted word accounts for. Breaths and room noise
+// never sustain 200 ms above -35 dBFS, so they do not save a gap the way they
+// fragment the quiet-region detector.
+const GAP_SPEECH_TOLERANCE = 0.05; // seconds of unexplained speech inside a gap that vetoes it
+
+export function gapCuts(words: Word[], speech: Range[] | undefined, settings: PauseSettings | undefined, sourceDuration?: number): Range[] {
+  if (!settings?.enabled || !speech) return [];
+  const kept = words.filter((w) => !w.deleted).sort((a, b) => a.start - b.start);
+  if (!kept.length) return [];
+  const deletedSpans = words.filter((w) => w.deleted).map((w) => ({ start: w.start, end: w.end }));
+  const overlap = (a: Range, b: Range) => Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start));
+
+  const bounds: Range[] = [];
+  if (kept[0].start > 0) bounds.push({ start: 0, end: kept[0].start });
+  for (let i = 0; i + 1 < kept.length; i++) {
+    if (kept[i + 1].start > kept[i].end) bounds.push({ start: kept[i].end, end: kept[i + 1].start });
+  }
+  const last = kept[kept.length - 1];
+  if (sourceDuration !== undefined && sourceDuration > last.end) bounds.push({ start: last.end, end: sourceDuration });
+
+  const out: Range[] = [];
+  for (const g of bounds) {
+    if (g.end - g.start + 1e-9 < settings.minGap) continue;
+    let unexplained = 0;
+    for (const r of speech) {
+      const inGap = overlap(r, g);
+      if (inGap <= 0) continue;
+      let explained = 0;
+      for (const d of deletedSpans) explained += overlap({ start: Math.max(r.start, g.start), end: Math.min(r.end, g.end) }, d);
+      unexplained += Math.max(0, inGap - explained);
+    }
+    if (unexplained > GAP_SPEECH_TOLERANCE) continue; // possible transcription hole: leave the pause alone
+    const start = g.start + settings.margin, end = g.end - settings.margin;
+    if (end - start + 1e-9 >= MIN_CUT) out.push({ start, end });
+  }
+  return out;
+}
+
 function mergeRanges(ranges: Range[]): Range[] {
   const sorted = [...ranges].sort((a, b) => a.start - b.start);
   const merged: Range[] = [];
@@ -87,11 +128,13 @@ function closeSlivers(cuts: Range[], words: Word[]): Range[] {
   return out;
 }
 
-// The one cut list every consumer uses: deleted words plus tightened pauses.
-export function deriveCuts(project: { words: Word[]; pauses?: Range[]; tightenPauses?: PauseSettings }): Range[] {
+// The one cut list every consumer uses: deleted words plus tightened pauses plus guarded gap cuts.
+export function deriveCuts(project: { words: Word[]; pauses?: Range[]; speech?: Range[]; tightenPauses?: PauseSettings; sourceDuration?: number }): Range[] {
   const words = computeCuts(project.words);
   const pauses = pauseCuts(project.words, project.pauses, project.tightenPauses);
-  return closeSlivers(pauses.length ? mergeRanges([...words, ...pauses]) : words, project.words);
+  const gaps = gapCuts(project.words, project.speech, project.tightenPauses, project.sourceDuration);
+  const extra = [...pauses, ...gaps];
+  return closeSlivers(extra.length ? mergeRanges([...words, ...extra]) : words, project.words);
 }
 
 // Inverse: the segments of the source that survive.

@@ -128,7 +128,7 @@ export function snapWordBoundaries(words: { start: number; end: number; rawStart
 export const QUIET_DBFS = -50; // speech here sits around -35 dBFS (p50); -40 caught quiet speech
 export const QUIET_MIN_SEC = 0.3; // shortest region stored; the user's min pause filters further
 export const BLIP_SEC = 0.02; // a sound shorter than this (a click) does not end a pause; 60 ms let a soft "if you" through
-export const PAUSE_ANALYSIS_VERSION = 3; // bump when detection changes so stored pauses are re-analyzed
+export const PAUSE_ANALYSIS_VERSION = 4; // bump when detection changes so stored pauses are re-analyzed (v4: + speech runs)
 const EPS = 1e-9; // float tolerance: a region of exactly minSec is kept wherever it starts
 
 // Stretches of the recording at or below `floorDb`, ignoring loud blips shorter
@@ -155,6 +155,35 @@ export function findQuietRegions(pcm: Pcm, floorDb = QUIET_DBFS, minSec = QUIET_
     const start = +(i * hopSec).toFixed(3), end = Math.min(total, +(j * hopSec).toFixed(3)); // clamp after rounding
     if (end - start + EPS >= minSec) out.push({ start, end });
     i = j;
+  }
+  return out;
+}
+
+// ── Speech runs (gap cuts, ADR-010) ──────────────────────────────────────────
+// Port of capcut's longest_loud_run_us (capcut ADR-033): sustained runs of 40 ms
+// hops above -35 dBFS mark real voice; breaths and room noise sit well below and
+// never sustain. Used to veto a transcript-gap cut whose interior holds speech
+// that whisper skipped (a transcription hole).
+export const SPEECH_DBFS = -35;
+export const SPEECH_HOLD_SEC = 0.2;
+export const SPEECH_HOP_US = 40_000;
+
+export function findSpeechRuns(pcm: Pcm, floorDb = SPEECH_DBFS, holdSec = SPEECH_HOLD_SEC, hopUs = SPEECH_HOP_US): { start: number; end: number }[] {
+  const hopSec = hopUs / 1_000_000;
+  const hop = Math.max(1, usToIndex(hopUs, pcm.sampleRate));
+  const floorRms = FULL_SCALE * 10 ** (floorDb / 20);
+  const nHops = Math.ceil(pcm.samples.length / hop);
+  const total = pcm.samples.length / pcm.sampleRate;
+  const out: { start: number; end: number }[] = [];
+  let runStart = -1;
+  for (let k = 0; k <= nHops; k++) {
+    const loud = k < nHops && windowRms(pcm.samples, k * hop, (k + 1) * hop) > floorRms;
+    if (loud && runStart < 0) runStart = k;
+    if (!loud && runStart >= 0) {
+      const start = +(runStart * hopSec).toFixed(3), end = Math.min(total, +(k * hopSec).toFixed(3));
+      if (end - start + 1e-9 >= holdSec) out.push({ start, end });
+      runStart = -1;
+    }
   }
   return out;
 }

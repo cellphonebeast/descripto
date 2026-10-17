@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { createPlaybackClock, EditedTimeline, VideoControls } from "@/components/edited-playback";
 import { Icon, StudioMark } from "@/components/studio-icon";
-import { DEFAULT_PAUSES, deriveCuts, pauseCuts, programDuration, sourceToProgram, programToSource, type Range } from "@/lib/edl";
+import { DEFAULT_PAUSES, deriveCuts, gapCuts, pauseCuts, programDuration, sourceToProgram, programToSource, type Range } from "@/lib/edl";
 import type { PauseSettings } from "@/lib/types";
 import { nextPreviewTime } from "@/lib/preview";
 import { findRetakes } from "@/lib/retakes";
@@ -86,9 +86,19 @@ export default function EditorClient({ id, initialProject }: { id: string; initi
   const tabStopWord = words.find(w => w.id === focusedWord && (!hideCuts || !w.deleted))?.id || words.find(w => !hideCuts || !w.deleted)?.id;
   const searchTerm = search.trim().toLocaleLowerCase();
   const matches = words.filter(w => (!hideCuts || !w.deleted) && searchTerm && w.text.toLocaleLowerCase().includes(searchTerm));
-  const cuts: Range[] = useMemo(() => deriveCuts({ words, pauses: project.pauses, tightenPauses: project.tightenPauses }), [words, project.pauses, project.tightenPauses]);
+  const cuts: Range[] = useMemo(() => deriveCuts({ words, pauses: project.pauses, speech: project.speech, tightenPauses: project.tightenPauses, sourceDuration: project.sourceDuration }), [words, project.pauses, project.speech, project.tightenPauses, project.sourceDuration]);
   const pauseSettings = project.tightenPauses ?? DEFAULT_PAUSES;
-  const tightened = useMemo(() => pauseCuts(words, project.pauses, { ...pauseSettings, enabled: true }), [words, project.pauses, pauseSettings]);
+  const tightened = useMemo(() => {
+    const on = { ...pauseSettings, enabled: true };
+    const merged = [...pauseCuts(words, project.pauses, on), ...gapCuts(words, project.speech, on, project.sourceDuration)].sort((a, b) => a.start - b.start);
+    const out: Range[] = [];
+    for (const c of merged) {
+      const last = out[out.length - 1];
+      if (last && c.start <= last.end + 0.001) last.end = Math.max(last.end, c.end);
+      else out.push({ ...c });
+    }
+    return out;
+  }, [words, project.pauses, project.speech, pauseSettings, project.sourceDuration]);
   const tightenedSec = tightened.reduce((sum, c) => sum + c.end - c.start, 0);
   const progDur = useMemo(
     () => (project ? programDuration(cuts, project.sourceDuration) : 0),
