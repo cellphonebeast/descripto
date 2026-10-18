@@ -95,7 +95,13 @@ export function gapCuts(words: Word[], speech: Range[] | undefined, settings: Pa
       unexplained += Math.max(0, inGap - explained);
     }
     if (unexplained > GAP_SPEECH_TOLERANCE) continue; // possible transcription hole: leave the pause alone
-    const start = g.start + settings.margin, end = g.end - settings.margin;
+    // No margin on an edge touching the program boundary (lead-in start / tail-out end):
+    // there's no adjacent kept speech there to protect, so the margin would just strand
+    // an uncut sliver of silence at position 0 or at sourceDuration.
+    const isLeadIn = g.start === 0;
+    const isTailOut = sourceDuration !== undefined && g.end === sourceDuration;
+    const start = g.start + (isLeadIn ? 0 : settings.margin);
+    const end = g.end - (isTailOut ? 0 : settings.margin);
     if (end - start + 1e-9 >= MIN_CUT) out.push({ start, end });
   }
   return out;

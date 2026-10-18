@@ -71,8 +71,8 @@ test('gapCuts: leading and trailing silence are cut; trailing needs sourceDurati
   const speech = [{ start: 3, end: 4 }];
   const withDur = gapCuts(words, speech, on, 10);
   assert.equal(withDur.length, 2, JSON.stringify(withDur));
-  assert.ok(near(withDur[0].start, 0.25) && near(withDur[0].end, 2.75), JSON.stringify(withDur[0]));
-  assert.ok(near(withDur[1].start, 4.25) && near(withDur[1].end, 9.75), JSON.stringify(withDur[1]));
+  assert.ok(near(withDur[0].start, 0) && near(withDur[0].end, 2.75), JSON.stringify(withDur[0])); // no margin at program start: no sliver stranded at 0
+  assert.ok(near(withDur[1].start, 4.25) && near(withDur[1].end, 10), JSON.stringify(withDur[1])); // no margin at program end: no sliver stranded at sourceDuration
   assert.equal(gapCuts(words, speech, on, undefined).length, 1); // no trailing gap without a duration
 });
 
